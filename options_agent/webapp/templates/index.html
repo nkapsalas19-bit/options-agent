@@ -206,6 +206,72 @@
     font-family: 'JetBrains Mono', monospace;
     text-align: right;
   }
+  .legend {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .legend .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 2px;
+    margin-right: 5px;
+  }
+  .chain-section {
+    background: var(--panel);
+    border-top: 1px solid var(--panel-border);
+    padding: 16px 20px 24px;
+  }
+  .chain-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+  .chain-hint {
+    font-size: 10px;
+    color: var(--amber);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .chain-tables {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .chain-col-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding-bottom: 6px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .chain-col-title.call { color: var(--green); }
+  .chain-col-title.put { color: var(--red); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  th {
+    text-align: right;
+    color: var(--text-dim);
+    font-weight: 500;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  th:first-child, td:first-child { text-align: left; }
+  td {
+    text-align: right;
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(31,37,48,0.5);
+    color: var(--text);
+  }
+  tr.atm-row td { background: rgba(240,185,11,0.08); }
 </style>
 </head>
 <body>
@@ -226,6 +292,13 @@
       <option value="bb_squeeze_breakout">Bollinger Squeeze Breakout</option>
       <option value="orb">Opening Range Breakout</option>
     </select>
+    <select id="intervalSelect">
+      <option value="1d">Daily</option>
+      <option value="1h">1 Hour</option>
+      <option value="15m">15 Min</option>
+      <option value="5m">5 Min</option>
+    </select>
+    <select id="periodSelect"></select>
   </div>
 </div>
 
@@ -235,6 +308,12 @@
     <div class="synthetic-flag" id="syntheticFlag">⚠ SYNTHETIC DATA (fallback)</div>
     <div id="errorBanner" style="display:none; position:absolute; top:60px; left:24px; right:24px; z-index:6; background:rgba(255,71,87,0.1); border:1px solid rgba(255,71,87,0.4); color:#ff4757; padding:12px 16px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px;"></div>
     <div id="chart"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:#4d9eff"></span> Fast MA / Upper band</span>
+      <span><span class="dot" style="background:#f0b90b"></span> Slow MA / Mid band</span>
+      <span><span class="dot" style="background:#00d9a3"></span> ▲ BUY signal</span>
+      <span><span class="dot" style="background:#ff4757"></span> ▼ SELL signal</span>
+    </div>
   </div>
 
   <div class="panel">
@@ -251,7 +330,7 @@
     </div>
 
     <div>
-      <div class="panel-title">Trade Parameters</div>
+      <div class="panel-title">Auto-Picked Contract</div>
       <div class="row"><span class="label">Strike</span><span class="value" id="strike">—</span></div>
       <div class="row"><span class="label">Expiration</span><span class="value" id="expiration">—</span></div>
       <div class="row"><span class="label">Est. Entry</span><span class="value" id="entry">—</span></div>
@@ -263,7 +342,25 @@
 
     <div class="footer-note">
       Entry/target/stop are Black-Scholes estimates, not live bid/ask quotes.
-      Backtest before trusting any signal. Not financial advice.
+      Use the Options Chain below for real quotes. Not financial advice.
+    </div>
+  </div>
+</div>
+
+<div class="chain-section">
+  <div class="chain-header">
+    <div class="panel-title" style="margin:0;">Options Chain — <span id="chainTicker">SPY</span></div>
+    <select id="expirationSelect"></select>
+    <span class="chain-hint" id="chainSyntheticFlag" style="display:none;">⚠ estimated (real chain unavailable)</span>
+  </div>
+  <div class="chain-tables">
+    <div class="chain-col">
+      <div class="chain-col-title call">CALLS</div>
+      <table id="callsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="chain-col">
+      <div class="chain-col-title put">PUTS</div>
+      <table id="putsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 </div>
@@ -289,7 +386,26 @@ const overlayColors = {
   bb_upper: '#4d9eff', bb_mid: '#f0b90b', bb_lower: '#4d9eff',
 };
 
-let state = { ticker: 'SPY', strategy: 'ma_rsi' };
+let state = { ticker: 'SPY', strategy: 'ma_rsi', interval: '1d', period: null, expiration: null };
+
+const PERIOD_OPTIONS = {
+  '1d': [['3mo','3 Months'],['6mo','6 Months'],['1y','1 Year'],['3y','3 Years'],['5y','5 Years']],
+  '1h': [['5d','5 Days'],['1mo','1 Month'],['60d','60 Days']],
+  '15m': [['5d','5 Days'],['1mo','1 Month'],['60d','60 Days']],
+  '5m': [['5d','5 Days'],['1mo','1 Month'],['60d','60 Days']],
+};
+
+function populatePeriods() {
+  const sel = document.getElementById('periodSelect');
+  sel.innerHTML = '';
+  for (const [val, label] of PERIOD_OPTIONS[state.interval]) {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = label;
+    sel.appendChild(opt);
+  }
+  state.period = PERIOD_OPTIONS[state.interval][Math.min(2, PERIOD_OPTIONS[state.interval].length - 1)][0];
+  sel.value = state.period;
+}
 
 function clearOverlays() {
   Object.values(overlaySeries).forEach(s => chart.removeSeries(s));
@@ -308,7 +424,7 @@ function clearError() {
 
 async function loadChart() {
   try {
-    const res = await fetch(`/api/chart/${state.ticker}?strategy=${state.strategy}`);
+    const res = await fetch(`/api/chart/${state.ticker}?strategy=${state.strategy}&interval=${state.interval}&period=${state.period}`);
     if (res.status === 401) { window.location.href = '/login'; return; }
     if (!res.ok) { showError(`Chart request failed (HTTP ${res.status}). Is the Flask server running?`); return; }
     const data = await res.json();
@@ -371,12 +487,57 @@ function refreshAll() {
   loadAlert();
 }
 
+async function loadExpirations() {
+  const res = await fetch(`/api/expirations/${state.ticker}`);
+  const d = await res.json();
+  const sel = document.getElementById('expirationSelect');
+  sel.innerHTML = '';
+  d.expirations.forEach(exp => {
+    const opt = document.createElement('option');
+    opt.value = exp; opt.textContent = exp;
+    sel.appendChild(opt);
+  });
+  state.expiration = d.expirations[0];
+  sel.value = state.expiration;
+  document.getElementById('chainTicker').textContent = state.ticker;
+  loadChain();
+}
+
+async function loadChain() {
+  if (!state.expiration) return;
+  const res = await fetch(`/api/chain/${state.ticker}?expiration=${state.expiration}`);
+  const d = await res.json();
+  document.getElementById('chainSyntheticFlag').style.display = d.is_synthetic ? 'inline' : 'none';
+
+  fillChainTable('callsTable', d.calls, d.spot);
+  fillChainTable('putsTable', d.puts, d.spot);
+}
+
+function fillChainTable(tableId, rows, spot) {
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  tbody.innerHTML = '';
+  rows.sort((a, b) => a.strike - b.strike);
+  let closestIdx = 0, closestDiff = Infinity;
+  rows.forEach((r, i) => {
+    const diff = Math.abs(r.strike - spot);
+    if (diff < closestDiff) { closestDiff = diff; closestIdx = i; }
+  });
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    if (i === closestIdx) tr.className = 'atm-row';
+    const fmt = v => v == null ? '—' : v;
+    tr.innerHTML = `<td>$${r.strike}</td><td>${fmt(r.bid)}</td><td>${fmt(r.ask)}</td><td>${fmt(r.lastPrice)}</td><td>${fmt(r.volume)}</td><td>${fmt(r.openInterest)}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
 document.querySelectorAll('.seg-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     state.ticker = btn.dataset.ticker;
     refreshAll();
+    loadExpirations();
   });
 });
 
@@ -385,7 +546,25 @@ document.getElementById('strategySelect').addEventListener('change', (e) => {
   refreshAll();
 });
 
+document.getElementById('intervalSelect').addEventListener('change', (e) => {
+  state.interval = e.target.value;
+  populatePeriods();
+  refreshAll();
+});
+
+document.getElementById('periodSelect').addEventListener('change', (e) => {
+  state.period = e.target.value;
+  refreshAll();
+});
+
+document.getElementById('expirationSelect').addEventListener('change', (e) => {
+  state.expiration = e.target.value;
+  loadChain();
+});
+
+populatePeriods();
 refreshAll();
+loadExpirations();
 setInterval(refreshAll, 60000); // poll every 60s
 </script>
 

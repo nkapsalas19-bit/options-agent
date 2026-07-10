@@ -27,7 +27,7 @@ import pandas as pd
 import numpy as np
 
 import config
-from data_fetcher import fetch_daily
+from data_fetcher import fetch_daily, fetch_intraday, get_expirations, get_option_chain
 from strategies import STRATEGY_FUNCS
 from options_pricing import bs_price, select_strike
 
@@ -75,11 +75,19 @@ _cache = {}
 CACHE_TTL_SECONDS = 60
 
 
-def _get_data(ticker, strategy_name):
-    """Fetch + compute signals, with a short cache so the frontend can poll
-    frequently without hammering yfinance. Falls back to synthetic data if
-    the real fetch fails (e.g. no network), clearly flagged in the response."""
-    cache_key = (ticker, strategy_name)
+# interval -> (fetch function, valid periods for that interval)
+TIMEFRAMES = {
+    "1d": {"periods": ["3mo", "6mo", "1y", "3y", "5y"], "default_period": "1y"},
+    "1h": {"periods": ["5d", "1mo", "60d"], "default_period": "1mo"},
+    "15m": {"periods": ["5d", "1mo", "60d"], "default_period": "1mo"},
+    "5m": {"periods": ["5d", "1mo", "60d"], "default_period": "1mo"},
+}
+
+
+def _get_data(ticker, strategy_name, interval="1d", period=None):
+    """Fetch + compute signals for a given interval/period, with a short cache."""
+    period = period or TIMEFRAMES.get(interval, TIMEFRAMES["1d"])["default_period"]
+    cache_key = (ticker, strategy_name, interval, period)
     now = datetime.now()
     if cache_key in _cache:
         cached_time, cached_df, is_synthetic = _cache[cache_key]
@@ -88,7 +96,10 @@ def _get_data(ticker, strategy_name):
 
     is_synthetic = False
     try:
-        df = fetch_daily(ticker, period=config.BACKTEST_PERIOD)
+        if interval == "1d":
+            df = fetch_daily(ticker, period=period)
+        else:
+            df = fetch_intraday(ticker, interval=interval, period=period)
     except Exception:
         df = _synthetic_fallback(ticker)
         is_synthetic = True
@@ -125,13 +136,18 @@ def index():
 @login_required
 def chart_data(ticker):
     strategy_name = request.args.get("strategy", "ma_rsi")
+    interval = request.args.get("interval", "1d")
+    period = request.args.get("period")
     if strategy_name not in config.STRATEGIES:
         return jsonify({"error": f"unknown strategy {strategy_name}"}), 400
+    if interval not in TIMEFRAMES:
+        return jsonify({"error": f"unknown interval {interval}"}), 400
 
-    df, is_synthetic = _get_data(ticker, strategy_name)
+    df, is_synthetic = _get_data(ticker, strategy_name, interval, period)
 
+    time_fmt = "%Y-%m-%d" if interval == "1d" else "%Y-%m-%dT%H:%M:%S"
     candles = [
-        {"time": idx.strftime("%Y-%m-%d"), "open": round(r.open, 2), "high": round(r.high, 2),
+        {"time": idx.strftime(time_fmt), "open": round(r.open, 2), "high": round(r.high, 2),
          "low": round(r.low, 2), "close": round(r.close, 2)}
         for idx, r in df.iterrows()
     ]
@@ -139,32 +155,33 @@ def chart_data(ticker):
     markers = []
     for idx, r in df.iterrows():
         if r.get("signal") == 1:
-            markers.append({"time": idx.strftime("%Y-%m-%d"), "position": "belowBar",
+            markers.append({"time": idx.strftime(time_fmt), "position": "belowBar",
                              "color": "#00d9a3", "shape": "arrowUp", "text": "BUY"})
         elif r.get("signal") == -1:
-            markers.append({"time": idx.strftime("%Y-%m-%d"), "position": "aboveBar",
+            markers.append({"time": idx.strftime(time_fmt), "position": "aboveBar",
                              "color": "#ff4d5e", "shape": "arrowDown", "text": "SELL"})
 
     overlays = {}
     if strategy_name == "ma_rsi":
-        overlays["fast_ma"] = _line_series(df, "fast_ma")
-        overlays["slow_ma"] = _line_series(df, "slow_ma")
+        overlays["fast_ma"] = _line_series(df, "fast_ma", time_fmt)
+        overlays["slow_ma"] = _line_series(df, "slow_ma", time_fmt)
     elif strategy_name == "bb_squeeze_breakout":
-        overlays["bb_upper"] = _line_series(df, "bb_upper")
-        overlays["bb_mid"] = _line_series(df, "bb_mid")
-        overlays["bb_lower"] = _line_series(df, "bb_lower")
+        overlays["bb_upper"] = _line_series(df, "bb_upper", time_fmt)
+        overlays["bb_mid"] = _line_series(df, "bb_mid", time_fmt)
+        overlays["bb_lower"] = _line_series(df, "bb_lower", time_fmt)
 
     return jsonify({
         "ticker": ticker, "strategy": strategy_name, "is_synthetic": is_synthetic,
+        "interval": interval, "period": period or TIMEFRAMES[interval]["default_period"],
         "candles": candles, "markers": markers, "overlays": overlays,
     })
 
 
-def _line_series(df, col):
+def _line_series(df, col, time_fmt="%Y-%m-%d"):
     out = []
     for idx, val in df[col].items():
         if pd.notna(val):
-            out.append({"time": idx.strftime("%Y-%m-%d"), "value": round(float(val), 2)})
+            out.append({"time": idx.strftime(time_fmt), "value": round(float(val), 2)})
     return out
 
 
@@ -175,7 +192,7 @@ def alert(ticker):
     if strategy_name not in config.STRATEGIES:
         return jsonify({"error": f"unknown strategy {strategy_name}"}), 400
 
-    df, is_synthetic = _get_data(ticker, strategy_name)
+    df, is_synthetic = _get_data(ticker, strategy_name, interval="1d")
     latest = df.iloc[-1]
     spot = float(latest["close"])
 
@@ -229,6 +246,65 @@ def alert(ticker):
         "stop_est_price": round(stop_price, 2) if suggestion != "NONE" else None,
         "as_of": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
+
+
+@app.route("/api/expirations/<ticker>")
+@login_required
+def expirations(ticker):
+    """Real available expiration dates for this ticker, right now."""
+    try:
+        exps = get_expirations(ticker)
+        return jsonify({"ticker": ticker, "expirations": exps, "is_synthetic": False})
+    except Exception:
+        today = datetime.now()
+        fallback_exps = [(today + timedelta(days=d)).strftime("%Y-%m-%d") for d in (1, 3, 8, 15, 29)]
+        return jsonify({"ticker": ticker, "expirations": fallback_exps, "is_synthetic": True})
+
+
+@app.route("/api/chain/<ticker>")
+@login_required
+def chain(ticker):
+    """Real live options chain for one expiration, filtered to strikes near spot.
+    This is a live snapshot from the exchange via yfinance -- real bid/ask/last,
+    not a Black-Scholes estimate -- but it reflects THIS MOMENT, not history."""
+    expiration = request.args.get("expiration")
+    if not expiration:
+        return jsonify({"error": "expiration query param required"}), 400
+
+    try:
+        calls, puts = get_option_chain(ticker, expiration)
+        df, _ = _get_data(ticker, "ma_rsi", interval="1d")
+        spot = float(df.iloc[-1]["close"])
+
+        near_calls = calls[(calls["strike"] >= spot * 0.9) & (calls["strike"] <= spot * 1.1)]
+        near_puts = puts[(puts["strike"] >= spot * 0.9) & (puts["strike"] <= spot * 1.1)]
+
+        return jsonify({
+            "ticker": ticker, "expiration": expiration, "spot": round(spot, 2), "is_synthetic": False,
+            "calls": near_calls.round(2).to_dict(orient="records"),
+            "puts": near_puts.round(2).to_dict(orient="records"),
+        })
+    except Exception:
+        df, _ = _get_data(ticker, "ma_rsi", interval="1d")
+        spot = float(df.iloc[-1]["close"])
+        iv = config.DEFAULT_IV.get(ticker, 0.16)
+        try:
+            dte = max((datetime.strptime(expiration, "%Y-%m-%d") - datetime.now()).days, 0)
+        except ValueError:
+            dte = config.TARGET_DTE_DAYS
+
+        strikes = sorted(set(round(spot * (1 + pct)) for pct in (-0.04, -0.02, -0.01, 0, 0.01, 0.02, 0.04)))
+        calls_out, puts_out = [], []
+        for k in strikes:
+            calls_out.append({"strike": k, "lastPrice": round(bs_price(spot, k, dte, iv, config.RISK_FREE_RATE, "call"), 2),
+                               "bid": None, "ask": None, "volume": None, "openInterest": None, "impliedVolatility": round(iv, 2)})
+            puts_out.append({"strike": k, "lastPrice": round(bs_price(spot, k, dte, iv, config.RISK_FREE_RATE, "put"), 2),
+                              "bid": None, "ask": None, "volume": None, "openInterest": None, "impliedVolatility": round(iv, 2)})
+
+        return jsonify({
+            "ticker": ticker, "expiration": expiration, "spot": round(spot, 2), "is_synthetic": True,
+            "calls": calls_out, "puts": puts_out,
+        })
 
 
 if __name__ == "__main__":

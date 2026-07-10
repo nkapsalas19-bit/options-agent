@@ -32,3 +32,20 @@ def _clean(df, ticker):
 def latest_price(ticker):
     df = fetch_intraday(ticker, interval="1m", period="1d")
     return float(df["close"].iloc[-1])
+
+
+def get_expirations(ticker):
+    """Real available option expiration dates for this ticker, right now."""
+    t = yf.Ticker(ticker)
+    return list(t.options)
+
+
+def get_option_chain(ticker, expiration):
+    """Real live options chain (bid/ask/last/volume/OI/IV) for one expiration.
+    This is a live snapshot -- yfinance does not provide historical chains,
+    but for 'right now' this is real market data, not an estimate."""
+    t = yf.Ticker(ticker)
+    chain = t.option_chain(expiration)
+    calls = chain.calls[["strike", "bid", "ask", "lastPrice", "volume", "openInterest", "impliedVolatility"]]
+    puts = chain.puts[["strike", "bid", "ask", "lastPrice", "volume", "openInterest", "impliedVolatility"]]
+    return calls, puts
