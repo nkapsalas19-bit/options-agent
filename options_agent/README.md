@@ -28,11 +28,14 @@ further, not an instruction to execute.
 | `live_agent.py` | The run loop for SPY/QQQ only: pull data → check signal → route to broker → manage exits |
 | `universe.py` | Ticker universe for the scanner: live S&P 500 fetch (Wikipedia) or a curated fallback/watchlist |
 | `news.py` | Free headline fetch (yfinance) + VADER sentiment scoring, no API key needed |
-| `scanner.py` | Combines technicals + news sentiment into scored "callouts" across timeframes (see below) |
+| `fundamentals.py` | Earnings-date lookup and sector-ETF mapping (live-only enrichments, best-effort) |
+| `scanner.py` | Combines technicals + relative strength + multi-timeframe confluence + news + earnings/sector into scored "callouts" (see below) |
+| `scanner_backtest.py` | Walk-forward backtest of the scanner's technical scoring against real history — the evidence layer, see below |
 | `market_scanner.py` | The scanner's run loop: sweeps the universe, writes `scanner_results.json`, emails high-confidence callouts |
 | `alerts.py` | Gmail SMTP email alerts (prints to console instead if credentials aren't set) |
 | `test_pipeline.py` | Validates the SPY/QQQ pipeline with synthetic data (see below for why) |
-| `test_scanner.py` | Validates scanner scoring logic with synthetic data + stubbed news |
+| `test_scanner.py` | Validates scanner scoring logic (technical + RS + MTF + news) with synthetic data + stubbed news/earnings |
+| `test_scanner_backtest.py` | Validates the backtest's trade simulation and calibration math against constructed OHLC series |
 
 ## Market Scanner
 
@@ -44,19 +47,34 @@ ranked callouts:
 - **intraday** (15-minute bars) → suggests short-dated **calls/puts**
   (`config.TARGET_DTE_DAYS`).
 
-Each callout's **confidence score (0-100)** is fully explainable, built from:
-- up to 60 pts of **technical agreement** — how many configured strategies
-  fired the same direction (with the exact MA/RSI/Bollinger levels that
-  triggered it), RSI confirmation, volume vs. its 20-bar average, and
-  alignment with the longer-term trend (see below).
-- up to ±40 pts from **news sentiment** (VADER over recent yfinance
-  headlines) — a bonus if it agrees with the technical direction, a penalty
-  if it conflicts, zero if no headlines were found.
+Each callout's **confidence score (0-100)** is fully explainable and split
+into two tiers on purpose:
+
+**Backtestable tier (up to 80 pts, all from OHLCV alone — see next section):**
+- up to 30 pts: how many configured strategies fired the same direction
+  (with the exact MA/RSI/Bollinger levels that triggered it)
+- up to 10 pts: RSI confirmation
+- up to 10 pts: volume vs. its 20-bar average
+- up to 10 pts: alignment with the longer-term trend filter (see below)
+- up to 10 pts: **multi-timeframe confluence** (intraday callouts only) —
+  does the *daily* trend agree with the 15-minute signal, not just its own
+  short-term trend?
+- up to 10 pts: **relative strength vs. SPY** — has this ticker actually
+  out/underperformed the market by a meaningful margin over the last 60
+  days, or is the signal happening in a name nobody's trading?
+
+**Live-only tier (not backtested — no free historical data for either):**
+- up to ±20 pts: **news sentiment** (VADER over recent yfinance headlines)
+- up to +5 pts: **sector confirmation** — is the whole sector ETF (e.g. XLK
+  for tech) moving the same direction, or is this one name isolated?
+- up to −10 pts: **earnings-date risk** — flags/penalizes an option
+  suggestion whose DTE window contains an earnings print (IV crush risk)
 
 Callouts scoring below `config.MIN_CONFIDENCE_SCORE` are discarded entirely.
 `reasons` on every callout is a list of specific, numeric statements (actual
-prices, RSI values, volume ratios, headline text) — there is no opaque model
-in the loop, and every claim is checkable against the data that produced it.
+prices, RSI values, volume ratios, relative-strength percentages, headline
+text) — there is no opaque model in the loop, and every claim is checkable
+against the data that produced it.
 
 ### Trend filter (the main accuracy lever)
 
@@ -90,6 +108,58 @@ Every callout ships an `exit_plan`, not just an entry idea:
 - **Invalidation rule**: an exit condition tied to the technical trigger
   itself (e.g. "the fast/slow MA re-crosses the other way") — an exit signal
   that can fire *before* the stop-loss price is even touched.
+
+### Backtest evidence — the trust layer
+
+A confidence score is only worth trusting if someone checked whether it
+actually correlates with a good outcome on real data. That's what
+`scanner_backtest.py` does: it replays `scanner.backtestable_score` —
+**the exact same function the live scanner calls**, not a separate
+reimplementation that could quietly drift out of sync — bar-by-bar across
+each ticker's history, simulates the ATR-based exit plan forward from every
+signal, and reports:
+
+- **Overall stats**: trade count, win rate, profit factor, expectancy (in R,
+  i.e. multiples of risked capital), and a max-drawdown proxy.
+- **A calibration table**: trades bucketed by their technical score, showing
+  the win rate *within each bucket*. This is the actual evidence for "does a
+  higher score mean anything" — published as-is, including if a bucket
+  doesn't calibrate cleanly, rather than only surfacing the backtest when it
+  looks good.
+
+No lookahead: every indicator (SMA/RSI/Bollinger/ATR) is a `.rolling()`
+computation, causal by construction, so evaluating it at any historical bar
+using the full precomputed series is mathematically identical to
+recomputing it fresh on data truncated at that bar. Trades don't overlap on
+the same ticker/timeframe, matching how the live scanner only holds one
+position per name.
+
+**What this does NOT prove**, on purpose, not by omission:
+- News sentiment and earnings-date risk aren't included — yfinance has no
+  historical news archive on the free tier, so there's no way to backtest
+  what the sentiment score would have read on a given past date. A live
+  confidence score and the backtest's technical score are related but not
+  identical, and that gap is the honest cost of using free data sources.
+- Intraday's multi-timeframe confluence bonus isn't backtested either
+  (it needs the intraday and daily bars date-aligned bar-by-bar across
+  history, which is out of scope for this pass) — intraday backtest scores
+  have a lower ceiling than live intraday scores for that reason.
+- No real bid-ask spread, slippage, commissions, or actual historical option
+  prices (same limitation as `backtest.py` — see below).
+- **Past performance on historical data is not a guarantee of anything
+  live.** A calibration table that looks clean on 2-3 years of data can
+  still fail on the next 2-3 years; markets change regimes.
+
+Run it and read the calibration table before trusting any score this thing
+shows you:
+
+```bash
+python scanner_backtest.py
+```
+
+This writes `scanner_backtest_results.json`, which the dashboard's
+"Backtest Evidence" panel (`/api/backtest`) displays alongside the live
+scanner output.
 
 ### Honest limits on "real-time"
 

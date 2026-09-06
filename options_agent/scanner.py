@@ -1,11 +1,12 @@
 """
 Market-wide scanner: combines the existing rule-based technical strategies
-(strategies.py) with free news sentiment (news.py) across a configurable
-ticker universe (universe.py) and two timeframes, producing ranked
-"callouts" -- candidate trades with a transparent, explainable confidence
-score AND a concrete exit plan. Every point in the score and every exit
-level traces back to a specific rule and a real number computed from the
-data -- there's no black-box model here, and it is NOT a win-rate promise.
+(strategies.py) with relative strength, multi-timeframe confluence, free news
+sentiment, and event risk (earnings) across a configurable ticker universe
+(universe.py) and two timeframes, producing ranked "callouts" -- candidate
+trades with a transparent, explainable confidence score AND a concrete exit
+plan. Every point in the score and every exit level traces back to a specific
+rule and a real number computed from the data -- there's no black-box model
+here, and it is NOT a win-rate promise.
 
 Two timeframes are checked per ticker:
   "intraday" -- 15-minute bars, short-dated options (calls/puts), for
@@ -13,21 +14,40 @@ Two timeframes are checked per ticker:
   "swing"    -- daily bars, primarily a "buy/short shares" suggestion, with
                 a longer-dated option alternative also computed.
 
-Scoring (0-100, both components additive, see _technical_score/_news_score):
-  - up to 60 pts from technical agreement: how many of the timeframe's
-    strategies fired the same direction, RSI confirmation, volume
-    confirmation, and (intraday only) trend-filter alignment.
-  - up to +/-40 pts from news sentiment: bonus if recent headline sentiment
-    (VADER, see news.py) agrees with the technical direction, penalty if it
-    conflicts. No headlines found = 0 contribution either way.
+Scoring is split into two tiers on purpose (see config.py's point-budget
+section), because one of those tiers can be validated against history and
+the other can't:
 
-Accuracy lever: on the swing timeframe, a signal that fights the longer-term
-trend (config.TREND_FILTER_PERIOD-bar SMA) is discarded outright, not just
-scored lower -- counter-trend swing trades are the single most common source
-of losing "textbook" setups. Callouts below config.MIN_CONFIDENCE_SCORE are
-also discarded entirely.
+  BACKTESTABLE tier (see backtestable_score() below, up to 80 pts) --
+  strategy agreement, RSI, volume, the trend filter, multi-timeframe
+  confluence, and relative strength. All of it is computable from historical
+  OHLCV alone, which is exactly what scanner_backtest.py replays bar-by-bar
+  (importing this same function) to report an ACTUAL historical win rate,
+  profit factor, and score-calibration table -- not just a plausible-sounding
+  number. Run `python scanner_backtest.py` to see it.
+
+  LIVE-ONLY tier (news sentiment, earnings-date risk, sector confirmation)
+  -- these can't be backtested with free data (no historical news archive,
+  and simulating point-in-time earnings dates for hundreds of tickers across
+  years is out of scope here), so they're layered on top of the backtested
+  score for live callouts only. This means a live confidence score and the
+  backtest's tech_score are related but not identical -- documented, not
+  hidden.
+
+Accuracy levers, in order of how much they matter:
+  1. Trend filter: a swing signal that fights its own 50-bar SMA trend is
+     discarded outright, not just scored lower -- counter-trend swing trades
+     are the single most common source of losing "textbook" setups.
+  2. Relative strength: is this ticker actually leading/lagging the broader
+     market (SPY) over the last N days, or is the signal happening in a name
+     nobody's trading?
+  3. Multi-timeframe confluence: for intraday callouts, does the DAILY trend
+     (not just the 15-minute one) agree with the trade direction?
+  4. Earnings-date risk: an option suggestion inside an earnings window gets
+     flagged (IV crush risk), not silently ignored.
+Callouts below config.MIN_CONFIDENCE_SCORE are discarded entirely.
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import numpy as np
 
@@ -36,6 +56,7 @@ from data_fetcher import fetch_daily, fetch_intraday
 from strategies import STRATEGY_FUNCS
 from indicators import atr as atr_indicator
 from news import get_news_sentiment
+from fundamentals import days_until_earnings, get_sector_etf
 from options_pricing import bs_price, select_strike
 
 TIMEFRAME_STRATEGIES = {
@@ -66,10 +87,10 @@ def _fetch(ticker, tf_cfg):
     return fetch_intraday(ticker, interval=tf_cfg["interval"], period=tf_cfg["period"])
 
 
-def _describe_ma_rsi(sig_df, direction):
-    latest = sig_df.iloc[-1]
+def _describe_ma_rsi(sig_df, direction, idx=-1):
+    latest = sig_df.iloc[idx]
     fast, slow, rsi_val = latest["fast_ma"], latest["slow_ma"], latest.get("rsi")
-    when = sig_df.index[-1]
+    when = sig_df.index[idx]
     when_str = when.strftime("%Y-%m-%d %H:%M") if hasattr(when, "strftime") else str(when)
     verb = "crossed above" if direction == 1 else "crossed below"
     fast_n = config.STRATEGIES["ma_rsi"]["fast_ma"]
@@ -81,8 +102,8 @@ def _describe_ma_rsi(sig_df, direction):
     return reasons
 
 
-def _describe_bb_breakout(sig_df, direction):
-    latest = sig_df.iloc[-1]
+def _describe_bb_breakout(sig_df, direction, idx=-1):
+    latest = sig_df.iloc[idx]
     close, band = latest["close"], (latest["bb_upper"] if direction == 1 else latest["bb_lower"])
     bw = latest.get("bandwidth")
     side = "above upper band" if direction == 1 else "below lower band"
@@ -95,40 +116,81 @@ def _describe_bb_breakout(sig_df, direction):
 _DESCRIBERS = {"ma_rsi": _describe_ma_rsi, "bb_squeeze_breakout": _describe_bb_breakout}
 
 
-def _trend_filter(df, direction, period):
+def _trend_filter(df, direction, period, idx=-1, label="trend filter"):
     """Compares price against a longer SMA to check the signal isn't fighting
-    the broader trend. Returns (aligned: bool or None if not enough data, reason)."""
-    if len(df) < period:
-        return None, []
-    sma_val = df["close"].rolling(period).mean().iloc[-1]
+    the broader trend. Returns (aligned: bool or None if not enough data, reason).
+    Rolling means are causal by construction, so computing them once on the
+    full df and indexing at idx is identical to recomputing on a truncated
+    df ending at idx -- this is what makes it safe to reuse in a backtest."""
+    sma = df["close"].rolling(period).mean()
+    sma_val = sma.iloc[idx]
     if np.isnan(sma_val):
         return None, []
-    price = df["close"].iloc[-1]
+    price = df["close"].iloc[idx]
     trend_up = price > sma_val
     aligned = (direction == 1 and trend_up) or (direction == -1 and not trend_up)
     pct_diff = (price - sma_val) / sma_val * 100
-    reason = (f"trend filter: price (${price:.2f}) is {'above' if trend_up else 'below'} the "
+    reason = (f"{label}: price (${price:.2f}) is {'above' if trend_up else 'below'} the "
               f"{period}-bar SMA (${sma_val:.2f}, {pct_diff:+.1f}%) -- "
               f"{'aligned with' if aligned else 'AGAINST'} the {'bullish' if direction == 1 else 'bearish'} signal")
-    return aligned, [reason]
+    return bool(aligned), [reason]
 
 
-def _technical_score(df, strategy_names, trend_filter_period=None, trend_filter_hard=False):
-    """Runs each configured strategy on df, returns (direction, score_0_60, reasons, discarded)."""
+def relative_strength_excess(ticker_df, benchmark_df, idx=-1, lookback=None):
+    """Excess return of ticker_df vs benchmark_df over `lookback` bars, ending
+    at idx. Aligned by integer position, not date -- both series come from the
+    same source/period/interval request so their trading calendars should
+    already match; this is an approximation, not a guaranteed date join.
+    Returns None if either series doesn't have enough history at idx."""
+    lookback = lookback or config.RS_LOOKBACK_DAYS
+    row_pos = idx if idx >= 0 else len(ticker_df) + idx
+    if row_pos < lookback or benchmark_df is None or row_pos >= len(benchmark_df):
+        return None
+
+    t_now, t_then = ticker_df["close"].iloc[idx], ticker_df["close"].iloc[row_pos - lookback]
+    b_now, b_then = benchmark_df["close"].iloc[idx], benchmark_df["close"].iloc[row_pos - lookback]
+    if t_then <= 0 or b_then <= 0:
+        return None
+    return (t_now / t_then - 1) - (b_now / b_then - 1)
+
+
+def _relative_strength_bonus(direction, rs_value):
+    if rs_value is None:
+        return 0, []
+    pct = rs_value * 100
+    if direction == 1 and rs_value >= config.RS_OUTPERFORM_THRESHOLD:
+        return config.RS_BONUS, [f"relative strength: outperformed {config.RS_BENCHMARK} by {pct:+.1f}pp over "
+                                  f"{config.RS_LOOKBACK_DAYS}d -- a market leader, not a laggard bouncing"]
+    if direction == -1 and rs_value <= -config.RS_OUTPERFORM_THRESHOLD:
+        return config.RS_BONUS, [f"relative strength: lagged {config.RS_BENCHMARK} by {pct:+.1f}pp over "
+                                  f"{config.RS_LOOKBACK_DAYS}d -- confirms genuine weakness"]
+    return 0, [f"relative strength: {pct:+.1f}pp vs {config.RS_BENCHMARK} over {config.RS_LOOKBACK_DAYS}d "
+               f"-- not a strong confirmation either way"]
+
+
+def _technical_score(df, strategy_names, trend_filter_period=None, trend_filter_hard=False, idx=-1, precomputed=None):
+    """Runs each configured strategy on df, returns (direction, score_0_60, reasons, discarded).
+    idx/precomputed let a caller (scanner_backtest.py) evaluate this at any
+    historical bar without recomputing every rolling indicator from scratch
+    each time -- see the module docstring for why that's still lookahead-safe."""
     votes = []
     reasons = []
     latest_rsi = None
     fired_names = []
 
     for name in strategy_names:
-        sig_df = STRATEGY_FUNCS[name](df, config.STRATEGIES[name])
-        latest = sig_df.iloc[-1]
+        sig_df = (precomputed or {}).get(name)
+        if sig_df is None:
+            sig_df = STRATEGY_FUNCS[name](df, config.STRATEGIES[name])
+        latest = sig_df.iloc[idx]
         sig = latest.get("signal", 0)
         if sig != 0:
             votes.append(sig)
             fired_names.append((name, sig, sig_df))
         if "rsi" in sig_df.columns and latest_rsi is None:
-            latest_rsi = sig_df["rsi"].iloc[-1]
+            rsi_val = sig_df["rsi"].iloc[idx]
+            if not np.isnan(rsi_val):
+                latest_rsi = rsi_val
 
     if not votes:
         return 0, 0, [], False
@@ -139,28 +201,27 @@ def _technical_score(df, strategy_names, trend_filter_period=None, trend_filter_
 
     direction = 1 if net > 0 else -1
     agreeing = [(name, sig_df) for name, sig, sig_df in fired_names if sig == direction]
-    score = min(len(agreeing) * 20, 40)
+    score = min(len(agreeing) * config.AGREEMENT_PTS_PER_STRATEGY, config.AGREEMENT_MAX)
 
     for name, sig_df in agreeing:
-        reasons.extend(_DESCRIBERS[name](sig_df, direction))
+        reasons.extend(_DESCRIBERS[name](sig_df, direction, idx))
 
-    if latest_rsi is not None and not np.isnan(latest_rsi):
+    if latest_rsi is not None:
         if (direction == 1 and latest_rsi < 40) or (direction == -1 and latest_rsi > 60):
-            score += 10
+            score += config.RSI_BONUS
             reasons.append(f"RSI confirms extreme ({latest_rsi:.0f})")
 
-    if len(df) >= 20:
-        vol_avg = df["volume"].rolling(20).mean().iloc[-1]
-        vol_latest = df["volume"].iloc[-1]
-        if vol_avg and not np.isnan(vol_avg) and vol_latest > vol_avg * 1.3:
-            score += 10
-            reasons.append(f"volume {vol_latest/vol_avg:.1f}x its 20-bar average ({vol_latest:,.0f} vs {vol_avg:,.0f})")
+    vol_avg = df["volume"].rolling(20).mean().iloc[idx]
+    vol_latest = df["volume"].iloc[idx]
+    if not np.isnan(vol_avg) and vol_avg > 0 and vol_latest > vol_avg * 1.3:
+        score += config.VOLUME_BONUS
+        reasons.append(f"volume {vol_latest/vol_avg:.1f}x its 20-bar average ({vol_latest:,.0f} vs {vol_avg:,.0f})")
 
     if trend_filter_period:
-        aligned, trend_reasons = _trend_filter(df, direction, trend_filter_period)
-        # aligned can be a numpy.bool_ (from a pandas comparison) or None (not enough
-        # data yet) -- compare by truthiness/None, never "is True"/"is False" identity,
-        # since numpy.bool_(True) is not the Python singleton True.
+        aligned, trend_reasons = _trend_filter(df, direction, trend_filter_period, idx=idx)
+        # aligned is None (not enough data), or a plain bool -- never compare with
+        # "is True"/"is False", since a numpy.bool_ from a pandas comparison is not
+        # the Python singleton True/False.
         if aligned is None:
             pass
         elif not aligned:
@@ -168,10 +229,42 @@ def _technical_score(df, strategy_names, trend_filter_period=None, trend_filter_
                 return direction, 0, trend_reasons + ["discarded: counter-trend signal on the swing timeframe"], True
             reasons.extend(trend_reasons)  # soft warning only (intraday) -- no score change
         else:
-            score += 10
+            score += config.TREND_FILTER_BONUS
             reasons.extend(trend_reasons)
 
-    return direction, min(score, 60), reasons, False
+    return direction, min(score, config.TECH_SCORE_MAX), reasons, False
+
+
+def backtestable_score(df, strategy_names, trend_filter_period=None, trend_filter_hard=False,
+                        idx=-1, precomputed=None, daily_df=None, mtf_idx=-1, rs_value=None):
+    """Everything computable from OHLCV alone: _technical_score plus
+    multi-timeframe confluence (if daily_df given -- intraday callouts only)
+    plus relative strength (if rs_value given). This is the exact function
+    scanner_backtest.py replays across history, so a live callout's
+    "backtestable" component and the backtest's tech_score come from the
+    same code path, not a re-implementation that could quietly drift."""
+    direction, score, reasons, discarded = _technical_score(
+        df, strategy_names, trend_filter_period, trend_filter_hard, idx=idx, precomputed=precomputed,
+    )
+    if direction == 0 or discarded:
+        return direction, score, reasons, discarded
+
+    if daily_df is not None:
+        aligned, mtf_reasons = _trend_filter(daily_df, direction, config.TREND_FILTER_PERIOD, idx=mtf_idx,
+                                              label="higher-timeframe (daily) trend")
+        if aligned is None:
+            pass
+        elif aligned:
+            score += config.MTF_CONFLUENCE_BONUS
+            reasons.extend(mtf_reasons)
+        else:
+            reasons.extend(mtf_reasons)  # soft warning only -- intraday reversals can trade against the daily trend
+
+    rs_bonus, rs_reasons = _relative_strength_bonus(direction, rs_value)
+    score += rs_bonus
+    reasons.extend(rs_reasons)
+
+    return direction, min(score, config.BACKTESTABLE_SCORE_MAX), reasons, False
 
 
 def _news_score(ticker, direction):
@@ -185,12 +278,40 @@ def _news_score(ticker, direction):
     count_note = f"{len(headlines)} headline{'s' if len(headlines) != 1 else ''} in the last {config.NEWS_LOOKBACK_HOURS}h"
 
     if aligned:
-        score = min(abs(sentiment) * 40, 40)
+        score = min(abs(sentiment) * config.NEWS_BONUS_MAX / 0.9, config.NEWS_BONUS_MAX)
         return score, [f"news sentiment aligned ({sentiment:+.2f} avg over {count_note}){headline_note}"]
     if conflicting:
-        score = -min(abs(sentiment) * 30, 30)
+        score = -min(abs(sentiment) * config.NEWS_PENALTY_MAX / 0.9, config.NEWS_PENALTY_MAX)
         return score, [f"news sentiment CONFLICTS ({sentiment:+.2f} avg over {count_note}) -- confidence reduced{headline_note}"]
     return 0, [f"news sentiment neutral ({sentiment:+.2f} avg over {count_note})"]
+
+
+def _earnings_penalty(ticker, dte):
+    days = days_until_earnings(ticker)
+    if days is None:
+        return 0, []
+    if 0 <= days <= max(dte, config.EARNINGS_BLACKOUT_DAYS):
+        return -config.EARNINGS_PENALTY, [f"EARNINGS in {days}d, inside the option's {dte}-day window -- "
+                                           f"IV crush risk after the print; size down or skip the option leg"]
+    return 0, []
+
+
+def _sector_confirmation(ticker, direction):
+    etf = get_sector_etf(ticker)
+    if not etf:
+        return 0, []
+    try:
+        sector_df = fetch_daily(etf, period="3mo")
+    except Exception:
+        return 0, []
+    if len(sector_df) < 6:
+        return 0, []
+    ret5 = sector_df["close"].iloc[-1] / sector_df["close"].iloc[-6] - 1
+    aligned = (direction == 1 and ret5 > 0.01) or (direction == -1 and ret5 < -0.01)
+    if aligned:
+        return config.SECTOR_CONFIRMATION_BONUS, [f"sector ({etf}) moved {ret5*100:+.1f}% over the last 5 sessions "
+                                                    f"-- this move isn't isolated to one name"]
+    return 0, []
 
 
 def _build_exit_plan(direction, instrument, spot, df, tf_cfg, entry_option_price=None, option_type=None, dte=None):
@@ -252,27 +373,36 @@ def _build_exit_plan(direction, instrument, spot, df, tf_cfg, entry_option_price
     return plan
 
 
-def scan_ticker(ticker, timeframe_name):
+def scan_ticker(ticker, timeframe_name, daily_df=None, benchmark_df=None):
     tf_cfg = TIMEFRAME_STRATEGIES[timeframe_name]
+    use_cached_daily = tf_cfg["interval"] == "1d" and daily_df is not None
     try:
-        df = _fetch(ticker, tf_cfg)
+        df = daily_df if use_cached_daily else _fetch(ticker, tf_cfg)
     except Exception:
         return None
 
-    if len(df) < 30:
+    if df is None or len(df) < 30:
         return None
 
-    direction, tech_score, tech_reasons, discarded = _technical_score(
+    rs_value = relative_strength_excess(df if tf_cfg["interval"] == "1d" else daily_df, benchmark_df) \
+        if (benchmark_df is not None and (tf_cfg["interval"] == "1d" or daily_df is not None)) else None
+
+    direction, tech_score, tech_reasons, discarded = backtestable_score(
         df, tf_cfg["strategies"],
         trend_filter_period=tf_cfg["trend_filter_period"],
         trend_filter_hard=tf_cfg["trend_filter_hard"],
+        daily_df=(daily_df if tf_cfg["interval"] != "1d" else None),
+        rs_value=rs_value,
     )
     if direction == 0 or discarded:
         return None
 
     news_score, news_reasons = _news_score(ticker, direction)
-    confidence = max(0.0, min(100.0, tech_score + news_score))
-    if confidence < config.MIN_CONFIDENCE_SCORE:
+    reasons = tech_reasons + news_reasons
+
+    # Cheap pre-filter before spending extra network calls (earnings/sector) on a
+    # candidate that can't reach the confidence bar even with every remaining bonus.
+    if tech_score + news_score + config.SECTOR_CONFIRMATION_BONUS < config.MIN_CONFIDENCE_SCORE:
         return None
 
     spot = float(df["close"].iloc[-1])
@@ -281,6 +411,14 @@ def scan_ticker(ticker, timeframe_name):
     iv = config.DEFAULT_IV.get(ticker, config.DEFAULT_IV_FALLBACK)
     dte = tf_cfg["target_dte"]
     est_option_price = bs_price(spot, strike, dte, iv, config.RISK_FREE_RATE, option_type)
+
+    earnings_penalty, earnings_reasons = _earnings_penalty(ticker, dte)
+    sector_bonus, sector_reasons = _sector_confirmation(ticker, direction)
+    reasons = reasons + earnings_reasons + sector_reasons
+
+    confidence = max(0.0, min(100.0, tech_score + news_score + earnings_penalty + sector_bonus))
+    if confidence < config.MIN_CONFIDENCE_SCORE:
+        return None
 
     suggested_action = "BUY SHARES" if tf_cfg["instrument"] == "shares" and direction == 1 else (
         "SHORT / SELL SHARES" if tf_cfg["instrument"] == "shares" else f"BUY {option_type.upper()}"
@@ -303,7 +441,7 @@ def scan_ticker(ticker, timeframe_name):
         },
         "confidence_score": round(confidence, 1),
         "spot": round(spot, 2),
-        "reasons": tech_reasons + news_reasons,
+        "reasons": reasons,
         "exit_plan": exit_plan,
         "as_of": datetime.now().isoformat(timespec="seconds"),
     }
@@ -311,15 +449,34 @@ def scan_ticker(ticker, timeframe_name):
 
 def scan_universe(tickers, timeframe_names=None):
     timeframe_names = timeframe_names or list(TIMEFRAME_STRATEGIES.keys())
+    unique_tickers = list(dict.fromkeys(tickers))
+
+    try:
+        benchmark_df = fetch_daily(config.RS_BENCHMARK, period=TIMEFRAME_STRATEGIES["swing"]["period"])
+    except Exception as e:
+        print(f"[scanner] couldn't fetch relative-strength benchmark {config.RS_BENCHMARK}: {e}")
+        benchmark_df = None
+
+    daily_cache = {}
+    for ticker in unique_tickers:
+        try:
+            daily_cache[ticker] = fetch_daily(ticker, period=TIMEFRAME_STRATEGIES["swing"]["period"])
+        except Exception as e:
+            print(f"[scanner] {ticker} daily fetch failed: {e}")
+
     callouts = []
-    for ticker in tickers:
+    for ticker in unique_tickers:
+        daily_df = daily_cache.get(ticker)
+        if daily_df is None or len(daily_df) < 30:
+            continue
         for tf_name in timeframe_names:
             try:
-                result = scan_ticker(ticker, tf_name)
+                result = scan_ticker(ticker, tf_name, daily_df=daily_df, benchmark_df=benchmark_df)
             except Exception as e:
                 print(f"[scanner] {ticker}/{tf_name} failed: {e}")
                 result = None
             if result:
                 callouts.append(result)
+
     callouts.sort(key=lambda c: c["confidence_score"], reverse=True)
     return callouts

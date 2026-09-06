@@ -327,5 +327,25 @@ def scanner_results():
         return jsonify(json.load(f))
 
 
+BACKTEST_RESULTS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scanner_backtest_results.json"
+)
+
+
+@app.route("/api/backtest")
+@login_required
+def backtest_results():
+    """Reads the latest output of scanner_backtest.py, run separately (python
+    scanner_backtest.py) -- a multi-year, multi-ticker walk-forward backtest is
+    far too slow to run inside a web request."""
+    if not os.path.exists(BACKTEST_RESULTS_PATH):
+        return jsonify({
+            "generated_at": None, "report": {},
+            "note": "Backtest hasn't run yet. Start it separately with: python scanner_backtest.py",
+        })
+    with open(BACKTEST_RESULTS_PATH) as f:
+        return jsonify(json.load(f))
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5000, host="0.0.0.0")

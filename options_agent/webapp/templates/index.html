@@ -372,6 +372,59 @@
   .exit-box .exit-title { color: var(--text-dim); font-size: 10px; margin-bottom: 4px; text-transform: uppercase; }
   .exit-box .exit-row { display: flex; justify-content: space-between; margin: 2px 0; }
   .exit-basis { color: var(--text-dim); font-size: 10px; margin-top: 6px; font-family: 'Inter', sans-serif; line-height: 1.4; }
+
+  .bt-tf-block { margin-bottom: 18px; }
+  .bt-tf-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #e8eaef;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+  .bt-stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .bt-stat-tile {
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .bt-stat-tile .bt-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; }
+  .bt-stat-tile .bt-value { font-size: 16px; font-weight: 700; color: #e8eaef; margin-top: 2px; }
+  .bt-note {
+    font-size: 11px;
+    color: var(--amber);
+    background: rgba(240,185,11,0.08);
+    border: 1px solid rgba(240,185,11,0.3);
+    border-radius: 4px;
+    padding: 6px 10px;
+    margin-bottom: 10px;
+  }
+  .bt-calibration-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .bt-calibration-table th {
+    text-align: right;
+    color: var(--text-dim);
+    font-weight: 500;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .bt-calibration-table th:first-child, .bt-calibration-table td:first-child { text-align: left; }
+  .bt-calibration-table td {
+    text-align: right;
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(31,37,48,0.5);
+    color: var(--text);
+  }
 </style>
 </head>
 <body>
@@ -462,6 +515,24 @@
       <div class="chain-col-title put">PUTS</div>
       <table id="putsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
     </div>
+  </div>
+</div>
+
+<div class="scanner-section">
+  <div class="scanner-header">
+    <div class="panel-title" style="margin:0;">Backtest Evidence — Does The Score Actually Predict Anything?</div>
+    <span class="scanner-meta" id="backtestMeta">not run yet</span>
+  </div>
+  <div id="backtestEmpty" class="scanner-empty" style="display:none;"></div>
+  <div id="backtestBody" style="display:none;"></div>
+  <div class="footer-note">
+    This is a walk-forward backtest of the TECHNICAL portion of the score only (strategy
+    agreement, RSI, volume, trend filter, multi-timeframe confluence, relative strength) --
+    news sentiment and earnings-date risk are live-only and can't be backtested with free
+    data (see scanner_backtest.py). It does not include real bid/ask spreads, slippage, or
+    actual historical option prices. Run <code>python scanner_backtest.py</code> separately
+    to generate/refresh this. Past performance on historical data is not a guarantee of
+    future results.
   </div>
 </div>
 
@@ -687,6 +758,83 @@ function renderExitPlan(c) {
   `;
 }
 
+function renderBacktestTimeframe(tfName, tfReport) {
+  const overall = tfReport.overall || {};
+  const calibration = tfReport.calibration || [];
+  const ceiling = tfReport.score_ceiling_this_timeframe;
+
+  let html = `<div class="bt-tf-block"><div class="bt-tf-title">${escapeHtml(tfName)}</div>`;
+
+  if (!overall.trades) {
+    html += `<div class="bt-note">No trades generated for this timeframe.</div></div>`;
+    return html;
+  }
+
+  if (overall.note) {
+    html += `<div class="bt-note">⚠ ${escapeHtml(overall.note)}</div>`;
+  }
+
+  const pf = overall.profit_factor;
+  html += `
+    <div class="bt-stat-row">
+      <div class="bt-stat-tile"><div class="bt-label">Trades</div><div class="bt-value">${overall.trades}</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Win Rate</div><div class="bt-value">${(overall.win_rate * 100).toFixed(1)}%</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Profit Factor</div><div class="bt-value">${pf}</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Expectancy</div><div class="bt-value">${overall.expectancy_r}R</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Max Drawdown*</div><div class="bt-value">${(overall.max_drawdown_proxy * 100).toFixed(1)}%</div></div>
+    </div>
+  `;
+
+  if (calibration.length) {
+    html += `
+      <table class="bt-calibration-table">
+        <thead><tr><th>Score Bucket (of ${ceiling})</th><th>Trades</th><th>Win Rate</th><th>Avg R</th></tr></thead>
+        <tbody>
+          ${calibration.map(row => `
+            <tr>
+              <td>${escapeHtml(row.score_bucket)}</td>
+              <td>${row.trades}</td>
+              <td>${(row.win_rate * 100).toFixed(1)}%</td>
+              <td>${row.avg_r}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+async function loadBacktest() {
+  try {
+    const res = await fetch('/api/backtest');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) return;
+    const d = await res.json();
+
+    const meta = document.getElementById('backtestMeta');
+    const body = document.getElementById('backtestBody');
+    const empty = document.getElementById('backtestEmpty');
+
+    if (!d.generated_at || !d.report || Object.keys(d.report).length === 0) {
+      meta.textContent = d.note || 'not run yet';
+      body.style.display = 'none';
+      empty.style.display = 'block';
+      empty.textContent = d.note || 'Backtest has not run yet.';
+      return;
+    }
+
+    meta.textContent = `generated ${d.generated_at}`;
+    empty.style.display = 'none';
+    body.style.display = 'block';
+    body.innerHTML = Object.entries(d.report).map(([tf, tfReport]) => renderBacktestTimeframe(tf, tfReport)).join('');
+  } catch (e) {
+    // stay quiet; the chart panel already surfaces connection errors
+  }
+}
+
 async function loadScanner() {
   try {
     const res = await fetch('/api/scanner');
@@ -788,8 +936,10 @@ document.getElementById('expirationSelect').addEventListener('change', (e) => {
 populatePeriods();
 refreshAll();
 loadExpirations();
+loadBacktest();
 loadScanner();
 setInterval(refreshAll, 60000); // poll every 60s
+setInterval(loadBacktest, 60000);
 setInterval(loadScanner, 60000);
 </script>
 

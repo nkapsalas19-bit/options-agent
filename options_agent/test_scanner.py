@@ -77,11 +77,38 @@ def main():
     print(f"aligned={aligned} reasons={trend_reasons}")
     assert aligned is not None and not aligned, "a bearish call while price sits well above its 50-bar SMA should read as counter-trend"
 
-    print("\n=== 4. Full scan_ticker with fetch + news stubbed (aligned bullish news) ===")
+    print("\n=== 4. Relative strength: outperformance vs benchmark is detected correctly ===")
+    bench_df = make_trending_daily(days=200, seed=3, drift=0.0002)  # flat-ish benchmark
+    strong_df = make_trending_daily(days=200, seed=3, drift=0.004)  # same seed, clearly stronger drift
+    rs = scanner.relative_strength_excess(strong_df, bench_df, idx=-1, lookback=60)
+    print(f"relative strength (outperformer vs flat benchmark): {rs:+.3f}")
+    assert rs is not None and rs > 0, "a much stronger drift over the same window should read as positive excess return"
+    bonus, reasons = scanner._relative_strength_bonus(1, rs)
+    print(f"bonus={bonus} reasons={reasons}")
+    assert bonus == config.RS_BONUS
+
+    print("\n=== 5. backtestable_score adds the MTF confluence bonus when the daily trend agrees ===")
+    direction, score_no_mtf, _, _ = scanner.backtestable_score(
+        crossover_df, ["ma_rsi", "bb_squeeze_breakout"],
+        trend_filter_period=config.INTRADAY_TREND_FILTER_PERIOD, trend_filter_hard=False,
+    )
+    direction2, score_with_mtf, mtf_reasons, _ = scanner.backtestable_score(
+        crossover_df, ["ma_rsi", "bb_squeeze_breakout"],
+        trend_filter_period=config.INTRADAY_TREND_FILTER_PERIOD, trend_filter_hard=False,
+        daily_df=crossover_df,  # same series stands in for "the daily trend" here -- it's already trending up
+    )
+    print(f"without MTF: {score_no_mtf}, with MTF: {score_with_mtf}")
+    assert direction == direction2 == 1
+    assert score_with_mtf == score_no_mtf + config.MTF_CONFLUENCE_BONUS
+    assert any("higher-timeframe" in r for r in mtf_reasons)
+
+    print("\n=== 6. Full scan_ticker with fetch + news + earnings/sector stubbed (aligned bullish news) ===")
     scanner._fetch = lambda ticker, tf_cfg: crossover_df
     scanner.get_news_sentiment = lambda ticker, lookback: (0.4, ["Company beats on strong demand"])
-    # one strategy (20) + RSI/volume/trend bonuses + aligned news (~16) -- lower the threshold
-    # here just to exercise the full scan_ticker plumbing deterministically in this fixture.
+    scanner.days_until_earnings = lambda ticker: None       # no real yfinance calls in this sandboxed test
+    scanner.get_sector_etf = lambda ticker: None
+    # lower the threshold here just to exercise the full scan_ticker plumbing deterministically
+    # in this single-strategy-agreement fixture, rather than needing a two-strategy fixture.
     original_min_confidence = config.MIN_CONFIDENCE_SCORE
     config.MIN_CONFIDENCE_SCORE = 10
 
@@ -104,7 +131,7 @@ def main():
     assert "time_stop" in plan and "invalidation_rule" in plan
     assert "option" in plan and plan["option"]["profit_target"] > plan["option"]["entry_price"] > plan["option"]["stop_loss"]
 
-    print("\n=== 5. Conflicting news should reduce confidence vs aligned news ===")
+    print("\n=== 7. Conflicting news should reduce confidence vs aligned news ===")
     scanner.get_news_sentiment = lambda ticker, lookback: (-0.4, ["Company faces headwinds"])
     conflicting_result = scanner.scan_ticker("TEST", "swing")
     if conflicting_result is not None:

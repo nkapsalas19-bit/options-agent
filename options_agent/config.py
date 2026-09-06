@@ -83,6 +83,44 @@ ATR_TARGET_MULT = 2.5   # shares profit target = entry +/- ATR_TARGET_MULT * ATR
 SWING_MAX_HOLD_DAYS = 10        # time-stop: re-evaluate the swing thesis if neither level hits by then
 INTRADAY_MAX_HOLD_BARS = 12     # time-stop for the option alt, in units of the intraday interval (15m -> ~3h)
 
+# ---- Confidence score point budget ----
+# Split into two tiers so the backtest (scanner_backtest.py) can validate exactly the part
+# that's computable from historical OHLCV alone, and clearly separate it from the live-only
+# enrichments (news, earnings, sector) that free data sources can't backtest.
+#
+# Backtestable tier (technical, from OHLCV only):
+AGREEMENT_PTS_PER_STRATEGY = 15   # per strategy that fires in the winning direction
+AGREEMENT_MAX = 30                # cap (2 strategies configured per timeframe today)
+RSI_BONUS = 10
+VOLUME_BONUS = 10
+TREND_FILTER_BONUS = 10
+TECH_SCORE_MAX = AGREEMENT_MAX + RSI_BONUS + VOLUME_BONUS + TREND_FILTER_BONUS   # 60
+
+# ---- Multi-timeframe confluence (intraday callouts only: does the DAILY trend, not just the
+# 15m one, agree with the direction? real cross-timeframe confirmation, still OHLCV-only so
+# it's included in what the backtest validates) ----
+MTF_CONFLUENCE_BONUS = 10
+
+# ---- Relative strength vs a benchmark (a genuine "is this a market leader or laggard"
+# check, computed as excess return over a lookback window -- still OHLCV-only, so also
+# included in the backtestable tier) ----
+RS_BENCHMARK = "SPY"
+RS_LOOKBACK_DAYS = 60
+RS_OUTPERFORM_THRESHOLD = 0.05   # +/-5 percentage points of excess return counts as real confirmation
+RS_BONUS = 10
+
+BACKTESTABLE_SCORE_MAX = TECH_SCORE_MAX + MTF_CONFLUENCE_BONUS + RS_BONUS   # 80
+
+# Live-only tier (NOT included in scanner_backtest.py -- no free historical news archive,
+# and simulating "was there an earnings print N days after this specific historical bar"
+# for hundreds of tickers across years is out of scope here):
+# news sentiment: up to +/- NEWS_BONUS_MAX / NEWS_PENALTY_MAX (see scanner.py's _news_score)
+NEWS_BONUS_MAX = 20
+NEWS_PENALTY_MAX = 15
+EARNINGS_BLACKOUT_DAYS = 5   # flag if an earnings print falls within max(this, the option's DTE)
+EARNINGS_PENALTY = 10
+SECTOR_CONFIRMATION_BONUS = 5   # best-effort: is the whole sector ETF moving the same way, not just this name?
+
 # ---- Email alerts (Gmail SMTP) ----
 # Set these as environment variables -- never hardcode credentials in this file:
 #   GMAIL_ADDRESS       the Gmail account to send alerts from
