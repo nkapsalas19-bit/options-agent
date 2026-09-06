@@ -67,6 +67,22 @@ ALERT_MIN_CONFIDENCE = 75     # only email/SMS-alert on higher conviction than t
 SWING_TARGET_DTE_DAYS = 21    # longer-dated option alt offered alongside the primary "buy shares" swing call
 DEFAULT_IV_FALLBACK = 0.30    # rough placeholder IV for tickers not in DEFAULT_IV -- this is not calibrated to any real skew
 
+# ---- Trend filter (swing timeframe requires the trade to agree with the longer-term
+# trend -- historically the single biggest lever on real-world hit rate; a counter-trend
+# swing signal is discarded outright rather than just scored lower) ----
+TREND_FILTER_PERIOD = 50          # SMA period defining "the trend" for swing callouts
+INTRADAY_TREND_FILTER_PERIOD = 20 # shorter SMA for intraday -- bonus only, not a hard gate
+                                   # (intraday mean-reversion against the short trend is a
+                                   # legitimate setup, unlike a counter-trend multi-day swing)
+
+# ---- Exit plan (ATR-based for shares, so stops/targets scale with each ticker's actual
+# recent volatility instead of one flat percentage across every name) ----
+ATR_PERIOD = 14
+ATR_STOP_MULT = 1.5     # shares stop-loss = entry -/+ ATR_STOP_MULT * ATR
+ATR_TARGET_MULT = 2.5   # shares profit target = entry +/- ATR_TARGET_MULT * ATR (~1.7:1 reward/risk)
+SWING_MAX_HOLD_DAYS = 10        # time-stop: re-evaluate the swing thesis if neither level hits by then
+INTRADAY_MAX_HOLD_BARS = 12     # time-stop for the option alt, in units of the intraday interval (15m -> ~3h)
+
 # ---- Email alerts (Gmail SMTP) ----
 # Set these as environment variables -- never hardcode credentials in this file:
 #   GMAIL_ADDRESS       the Gmail account to send alerts from

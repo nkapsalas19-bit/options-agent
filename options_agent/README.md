@@ -46,14 +46,50 @@ ranked callouts:
 
 Each callout's **confidence score (0-100)** is fully explainable, built from:
 - up to 60 pts of **technical agreement** — how many configured strategies
-  fired the same direction, RSI confirmation, volume above its 20-bar average.
+  fired the same direction (with the exact MA/RSI/Bollinger levels that
+  triggered it), RSI confirmation, volume vs. its 20-bar average, and
+  alignment with the longer-term trend (see below).
 - up to ±40 pts from **news sentiment** (VADER over recent yfinance
   headlines) — a bonus if it agrees with the technical direction, a penalty
   if it conflicts, zero if no headlines were found.
 
 Callouts scoring below `config.MIN_CONFIDENCE_SCORE` are discarded entirely.
-`reasons` on every callout lists exactly which rules fired — there is no
-opaque model in the loop.
+`reasons` on every callout is a list of specific, numeric statements (actual
+prices, RSI values, volume ratios, headline text) — there is no opaque model
+in the loop, and every claim is checkable against the data that produced it.
+
+### Trend filter (the main accuracy lever)
+
+A signal that fights the longer-term trend is a well-documented source of
+losing "textbook" setups. So on the **swing** timeframe, a signal is compared
+against the `config.TREND_FILTER_PERIOD`-bar (default 50) SMA, and a
+**counter-trend signal is discarded outright**, not just scored lower — e.g.
+a bearish crossover while price is still well above its 50-day average never
+becomes a callout. On **intraday**, the same check against a shorter SMA
+(`config.INTRADAY_TREND_FILTER_PERIOD`, default 20) is a bonus/warning only,
+since a short-term mean-reversion trade against the intraday trend is a
+legitimate setup, unlike a multi-day counter-trend swing position.
+
+### Exit plan on every callout
+
+Every callout ships an `exit_plan`, not just an entry idea:
+- **Shares**: stop-loss and profit-target computed from **ATR** (Average
+  True Range, `config.ATR_PERIOD`) — `config.ATR_STOP_MULT` /
+  `config.ATR_TARGET_MULT` — so the levels scale with each ticker's actual
+  recent volatility instead of one flat percentage applied to every name
+  (a fixed 2% stop means something very different on a low-vol utility than
+  a high-vol momentum name). Reward:risk ratio is reported alongside.
+- **Option alt**: stop/target as a percent of the option premium
+  (`config.PROFIT_TARGET_PCT` / `config.STOP_LOSS_PCT`), since theta decay
+  makes an underlying-price-based stop unreliable for a short-dated
+  contract's actual P&L.
+- **Time-stop**: an explicit "close/re-evaluate by X" rule
+  (`config.SWING_MAX_HOLD_DAYS` for shares, `config.INTRADAY_MAX_HOLD_BARS`
+  for the option), because a setup that goes nowhere for that long has
+  usually stopped being the thesis that triggered it.
+- **Invalidation rule**: an exit condition tied to the technical trigger
+  itself (e.g. "the fast/slow MA re-crosses the other way") — an exit signal
+  that can fire *before* the stop-loss price is even touched.
 
 ### Honest limits on "real-time"
 

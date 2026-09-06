@@ -26,6 +26,19 @@ def bollinger_bands(series, period=20, num_std=2.0):
     return upper, mid, lower, bandwidth
 
 
+def atr(df, period=14):
+    """Average True Range -- measures actual recent volatility (gap-aware,
+    unlike a plain high-low range), used to size stops/targets off of real
+    price movement instead of an arbitrary flat percentage."""
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+
 def opening_range(df, range_minutes=15):
     """Computes the high/low of the first N minutes of each trading day.
     Assumes df index is intraday datetime, market open 9:30 ET."""

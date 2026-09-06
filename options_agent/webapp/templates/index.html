@@ -294,30 +294,84 @@
     color: var(--text-dim);
     padding: 16px 0;
   }
-  td.direction-bullish { color: var(--green); font-weight: 600; }
-  td.direction-bearish { color: var(--red); font-weight: 600; }
+  .callout-card {
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .callout-summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+  .callout-summary:hover { background: rgba(107,114,128,0.06); }
+  .callout-ticker { font-weight: 700; color: #e8eaef; width: 56px; }
+  .callout-tf {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    width: 60px;
+  }
+  .callout-direction { width: 70px; font-weight: 600; }
+  .callout-direction.bullish { color: var(--green); }
+  .callout-direction.bearish { color: var(--red); }
+  .callout-action { flex: 1; color: var(--text); }
+  .callout-spot { color: var(--text-dim); width: 80px; }
   .conf-bar-wrap {
     display: flex;
     align-items: center;
     gap: 6px;
-    justify-content: flex-end;
+    width: 90px;
   }
   .conf-bar-track {
-    width: 60px; height: 6px;
+    width: 50px; height: 6px;
     background: rgba(107,114,128,0.2);
     border-radius: 3px;
     overflow: hidden;
   }
-  .conf-bar-fill {
-    height: 100%;
-    background: var(--blue);
+  .conf-bar-fill { height: 100%; background: var(--blue); }
+  .callout-caret { color: var(--text-dim); font-size: 10px; width: 14px; text-align: center; }
+  .callout-details {
+    display: none;
+    padding: 4px 14px 16px 14px;
+    border-top: 1px solid var(--panel-border);
+    background: rgba(0,0,0,0.15);
   }
-  td.reasons-cell {
-    text-align: left;
-    color: var(--text-dim);
+  .callout-details.open { display: block; }
+  .callout-details h4 {
     font-size: 10px;
-    max-width: 320px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 12px 0 6px;
   }
+  .callout-details ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+  .exit-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+  }
+  .exit-box {
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .exit-box .exit-title { color: var(--text-dim); font-size: 10px; margin-bottom: 4px; text-transform: uppercase; }
+  .exit-box .exit-row { display: flex; justify-content: space-between; margin: 2px 0; }
+  .exit-basis { color: var(--text-dim); font-size: 10px; margin-top: 6px; font-family: 'Inter', sans-serif; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -417,20 +471,7 @@
     <span class="scanner-meta" id="scannerMeta">not run yet</span>
   </div>
   <div id="scannerEmpty" class="scanner-empty" style="display:none;"></div>
-  <table id="scannerTable" style="display:none;">
-    <thead>
-      <tr>
-        <th style="text-align:left;">Ticker</th>
-        <th style="text-align:left;">Timeframe</th>
-        <th style="text-align:left;">Direction</th>
-        <th style="text-align:left;">Suggested Action</th>
-        <th>Spot</th>
-        <th>Confidence</th>
-        <th style="text-align:left;">Reasons</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <div id="scannerCards"></div>
   <div class="footer-note">
     Confidence is a transparent 0-100 rule score (technical agreement + news sentiment
     alignment) computed by scanner.py -- it is NOT a win-rate or a guarantee. Run
@@ -605,6 +646,47 @@ function fillChainTable(tableId, rows, spot) {
   });
 }
 
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+function renderExitPlan(c) {
+  const plan = c.exit_plan;
+  if (!plan) return '';
+  const shares = plan.shares;
+  const option = plan.option;
+
+  let boxes = `
+    <div class="exit-box">
+      <div class="exit-title">Shares</div>
+      <div class="exit-row"><span>Entry</span><span>$${plan.entry_price.toFixed(2)}</span></div>
+      <div class="exit-row"><span class="value" style="color:var(--green)">Target</span><span>$${shares.profit_target.toFixed(2)}</span></div>
+      <div class="exit-row"><span style="color:var(--red)">Stop</span><span>$${shares.stop_loss.toFixed(2)}</span></div>
+      <div class="exit-row"><span>Reward:Risk</span><span>${shares.reward_risk_ratio}:1</span></div>
+      <div class="exit-basis">${escapeHtml(shares.basis)}</div>
+    </div>`;
+
+  if (option) {
+    boxes += `
+    <div class="exit-box">
+      <div class="exit-title">Option Alt — ${escapeHtml(c.option_alt.type)} $${c.option_alt.strike} (${c.option_alt.dte_days}d)</div>
+      <div class="exit-row"><span>Entry (est.)</span><span>$${option.entry_price.toFixed(2)}</span></div>
+      <div class="exit-row"><span style="color:var(--green)">Target</span><span>$${option.profit_target.toFixed(2)}</span></div>
+      <div class="exit-row"><span style="color:var(--red)">Stop</span><span>$${option.stop_loss.toFixed(2)}</span></div>
+      <div class="exit-basis">${escapeHtml(option.basis)}</div>
+    </div>`;
+  }
+
+  return `
+    <h4>Exit Plan</h4>
+    <div class="exit-grid">${boxes}</div>
+    <div class="exit-basis" style="margin-top:8px;"><strong>Time-stop:</strong> ${escapeHtml(plan.time_stop)}</div>
+    <div class="exit-basis" style="margin-top:4px;"><strong>Invalidation:</strong> ${escapeHtml(plan.invalidation_rule)}</div>
+  `;
+}
+
 async function loadScanner() {
   try {
     const res = await fetch('/api/scanner');
@@ -619,13 +701,11 @@ async function loadScanner() {
       meta.textContent = d.note || 'not run yet';
     }
 
-    const table = document.getElementById('scannerTable');
+    const container = document.getElementById('scannerCards');
     const empty = document.getElementById('scannerEmpty');
-    const tbody = table.querySelector('tbody');
-    tbody.innerHTML = '';
+    container.innerHTML = '';
 
     if (!d.callouts || d.callouts.length === 0) {
-      table.style.display = 'none';
       empty.style.display = 'block';
       empty.textContent = d.generated_at
         ? 'No callouts above the confidence threshold this cycle.'
@@ -634,27 +714,40 @@ async function loadScanner() {
     }
 
     empty.style.display = 'none';
-    table.style.display = 'table';
 
-    d.callouts.forEach(c => {
-      const tr = document.createElement('tr');
-      const dirClass = c.direction === 'BULLISH' ? 'direction-bullish' : 'direction-bearish';
-      const reasons = (c.reasons || []).join('; ');
-      tr.innerHTML = `
-        <td style="text-align:left;">${c.ticker}</td>
-        <td style="text-align:left;">${c.timeframe}</td>
-        <td class="${dirClass}" style="text-align:left;">${c.direction}</td>
-        <td style="text-align:left;">${c.suggested_action}</td>
-        <td>$${c.spot.toFixed(2)}</td>
-        <td>
+    d.callouts.forEach((c, i) => {
+      const card = document.createElement('div');
+      card.className = 'callout-card';
+      const dirClass = c.direction === 'BULLISH' ? 'bullish' : 'bearish';
+      const reasonsHtml = (c.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join('');
+
+      card.innerHTML = `
+        <div class="callout-summary" data-idx="${i}">
+          <span class="callout-ticker">${escapeHtml(c.ticker)}</span>
+          <span class="callout-tf">${escapeHtml(c.timeframe)}</span>
+          <span class="callout-direction ${dirClass}">${escapeHtml(c.direction)}</span>
+          <span class="callout-action">${escapeHtml(c.suggested_action)}</span>
+          <span class="callout-spot">$${c.spot.toFixed(2)}</span>
           <div class="conf-bar-wrap">
             <span>${c.confidence_score.toFixed(0)}</span>
             <div class="conf-bar-track"><div class="conf-bar-fill" style="width:${Math.min(c.confidence_score, 100)}%"></div></div>
           </div>
-        </td>
-        <td class="reasons-cell" title="${reasons}">${reasons}</td>
+          <span class="callout-caret">▾</span>
+        </div>
+        <div class="callout-details" id="calloutDetails${i}">
+          <h4>Why</h4>
+          <ul>${reasonsHtml}</ul>
+          ${renderExitPlan(c)}
+        </div>
       `;
-      tbody.appendChild(tr);
+      container.appendChild(card);
+    });
+
+    container.querySelectorAll('.callout-summary').forEach(row => {
+      row.addEventListener('click', () => {
+        const details = document.getElementById(`calloutDetails${row.dataset.idx}`);
+        details.classList.toggle('open');
+      });
     });
   } catch (e) {
     // stay quiet; the chart panel already surfaces connection errors

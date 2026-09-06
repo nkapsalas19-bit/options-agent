@@ -50,24 +50,38 @@ def make_df_ending_on_a_crossover(days=200, seed=7):
 def main():
     print("=== 1. Technical scoring when nothing fires (should be a clean no-op) ===")
     quiet_df = make_trending_daily(drift=0.0001, seed=99)
-    direction, score, reasons = scanner._technical_score(quiet_df, ["ma_rsi", "bb_squeeze_breakout"])
-    print(f"direction={direction} score={score} reasons={reasons}")
+    direction, score, reasons, discarded = scanner._technical_score(quiet_df, ["ma_rsi", "bb_squeeze_breakout"])
+    print(f"direction={direction} score={score} reasons={reasons} discarded={discarded}")
     assert direction in (0, 1, -1)
     assert 0 <= score <= 60
 
-    print("\n=== 2. Technical scoring on a bar that deterministically crosses over ===")
+    print("\n=== 2. Technical scoring on a bar that deterministically crosses over (trend filter aligned) ===")
     crossover_df = make_df_ending_on_a_crossover()
-    direction, score, reasons = scanner._technical_score(crossover_df, ["ma_rsi", "bb_squeeze_breakout"])
-    print(f"direction={direction} score={score} reasons={reasons}")
+    # the ramp pushes price well above its own 50-bar SMA, so the trend filter should align, not discard
+    direction, score, reasons, discarded = scanner._technical_score(
+        crossover_df, ["ma_rsi", "bb_squeeze_breakout"],
+        trend_filter_period=config.TREND_FILTER_PERIOD, trend_filter_hard=True,
+    )
+    print(f"direction={direction} score={score}")
+    for r in reasons:
+        print(f"  - {r}")
     assert direction == 1, "expected the forced ramp to fire a bullish crossover"
+    assert not discarded, "expected the post-ramp price to be aligned with its own 50-bar SMA, not discarded"
     assert score > 0 and reasons
+    assert any("trend filter" in r for r in reasons), "expected a trend-filter reason since a period was passed"
 
-    print("\n=== 3. Full scan_ticker with fetch + news stubbed (aligned bullish news) ===")
+    print("\n=== 3. Trend filter hard-discards a counter-trend swing signal ===")
+    # flip direction convention: pretend the discovered signal is bearish while price sits
+    # above its 50-bar SMA (the ramp made it so) -- this must be discarded, not just scored lower
+    aligned, trend_reasons = scanner._trend_filter(crossover_df, direction=-1, period=config.TREND_FILTER_PERIOD)
+    print(f"aligned={aligned} reasons={trend_reasons}")
+    assert aligned is not None and not aligned, "a bearish call while price sits well above its 50-bar SMA should read as counter-trend"
+
+    print("\n=== 4. Full scan_ticker with fetch + news stubbed (aligned bullish news) ===")
     scanner._fetch = lambda ticker, tf_cfg: crossover_df
     scanner.get_news_sentiment = lambda ticker, lookback: (0.4, ["Company beats on strong demand"])
-    # only one strategy fires in this fixture (tech score 20) + aligned news (~16) = ~36,
-    # below the real MIN_CONFIDENCE_SCORE=60 default -- lower it here just to exercise the
-    # full scan_ticker plumbing end-to-end without needing a two-strategy-agreement fixture.
+    # one strategy (20) + RSI/volume/trend bonuses + aligned news (~16) -- lower the threshold
+    # here just to exercise the full scan_ticker plumbing deterministically in this fixture.
     original_min_confidence = config.MIN_CONFIDENCE_SCORE
     config.MIN_CONFIDENCE_SCORE = 10
 
@@ -80,7 +94,17 @@ def main():
     assert isinstance(result["reasons"], list) and result["reasons"]
     assert result["suggested_action"] == "BUY SHARES"
 
-    print("\n=== 4. Conflicting news should reduce confidence vs aligned news ===")
+    print("\n--- exit plan ---")
+    plan = result["exit_plan"]
+    print(plan)
+    assert plan["entry_price"] == result["spot"]
+    assert plan["shares"]["profit_target"] > plan["entry_price"] > plan["shares"]["stop_loss"], \
+        "bullish shares plan should have target above entry above stop"
+    assert plan["shares"]["reward_risk_ratio"] is not None and plan["shares"]["reward_risk_ratio"] > 0
+    assert "time_stop" in plan and "invalidation_rule" in plan
+    assert "option" in plan and plan["option"]["profit_target"] > plan["option"]["entry_price"] > plan["option"]["stop_loss"]
+
+    print("\n=== 5. Conflicting news should reduce confidence vs aligned news ===")
     scanner.get_news_sentiment = lambda ticker, lookback: (-0.4, ["Company faces headwinds"])
     conflicting_result = scanner.scan_ticker("TEST", "swing")
     if conflicting_result is not None:

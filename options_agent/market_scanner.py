@@ -47,13 +47,29 @@ def _alert_key(c):
 
 def _format_alert(c):
     subject = f"[Scanner] {c['direction']} {c['ticker']} ({c['timeframe']}) -- confidence {c['confidence_score']}"
+    plan = c["exit_plan"]
+    shares = plan["shares"]
+    option = plan.get("option")
+
+    exit_lines = [
+        f"  Shares -- stop ${shares['stop_loss']} / target ${shares['profit_target']} "
+        f"(reward:risk {shares['reward_risk_ratio']}:1). {shares['basis']}.",
+        f"  Time-stop: {plan['time_stop']}",
+        f"  Invalidation: {plan['invalidation_rule']}",
+    ]
+    if option:
+        exit_lines.insert(1, f"  Option alt ({c['option_alt']['type']} ${c['option_alt']['strike']}, "
+                              f"{c['option_alt']['dte_days']}d) -- stop ${option['stop_loss']} / "
+                              f"target ${option['profit_target']}. {option['basis']}.")
+
     body = (
         f"{c['suggested_action']} on {c['ticker']}\n"
         f"Timeframe: {c['timeframe']}   Confidence score: {c['confidence_score']}/100\n"
-        f"Spot: ${c['spot']}\n\n"
-        "Reasons:\n- " + "\n- ".join(c["reasons"]) + "\n\n"
+        f"Entry (spot): ${c['spot']}\n\n"
+        "Why:\n- " + "\n- ".join(c["reasons"]) + "\n\n"
+        "Exit plan:\n" + "\n".join(exit_lines) + "\n\n"
         "This is a rule-based signal score, not a win-rate guarantee -- verify "
-        "before trading, especially options theta/spread costs.\n"
+        "before trading, especially real bid/ask spread and options theta decay.\n"
         f"As of {c['as_of']}"
     )
     return subject, body
