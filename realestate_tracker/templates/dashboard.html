@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Deal Tracker{% endblock %}
+
+{% block content %}
+<section class="stats-row">
+  <div class="stat-card">
+    <div class="stat-value">{{ new_count }}</div>
+    <div class="stat-label">New recommendations</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ total_properties }}</div>
+    <div class="stat-label">Properties tracked</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ active_criteria_count }}</div>
+    <div class="stat-label">Active saved searches</div>
+  </div>
+</section>
+
+<section class="filter-panel">
+  <form method="get" class="filter-form">
+    <input type="text" name="location" placeholder="City, state, or zip" value="{{ filters.get('location', '') }}">
+
+    <select name="property_type">
+      <option value="">All property types</option>
+      {% for pt in property_types %}
+        <option value="{{ pt }}" {% if filters.get('property_type') == pt %}selected{% endif %}>{{ pt.replace('_', ' ')|title }}</option>
+      {% endfor %}
+    </select>
+
+    <input type="text" name="zoning" placeholder="Zoning (e.g. R3, MU)" value="{{ filters.get('zoning', '') }}">
+
+    <input type="number" step="0.1" name="min_cap_rate" placeholder="Min cap rate %" value="{{ filters.get('min_cap_rate', '') }}">
+
+    <input type="number" step="1000" name="max_price" placeholder="Max price" value="{{ filters.get('max_price', '') }}">
+
+    <select name="strategy">
+      <option value="">Any strategy</option>
+      {% for s in strategies %}
+        <option value="{{ s }}" {% if filters.get('strategy') == s %}selected{% endif %}>{{ s.replace('_', ' ')|title }}</option>
+      {% endfor %}
+    </select>
+
+    <select name="sort">
+      <option value="recommended" {% if filters.get('sort', 'recommended') == 'recommended' %}selected{% endif %}>Best match</option>
+      <option value="cap_rate" {% if filters.get('sort') == 'cap_rate' %}selected{% endif %}>Highest cap rate</option>
+      <option value="newest" {% if filters.get('sort') == 'newest' %}selected{% endif %}>Newest</option>
+      <option value="price_asc" {% if filters.get('sort') == 'price_asc' %}selected{% endif %}>Price: low to high</option>
+      <option value="price_desc" {% if filters.get('sort') == 'price_desc' %}selected{% endif %}>Price: high to low</option>
+    </select>
+
+    <button type="submit">Filter</button>
+    <a class="clear-link" href="{{ url_for('dashboard') }}">Clear</a>
+  </form>
+</section>
+
+<section class="rec-list">
+  {% if not recommendations %}
+    <div class="empty-state">
+      <p>No recommendations yet.</p>
+      <p>Create a <a href="{{ url_for('criteria_list') }}">saved search</a> describing what you're looking for, then click
+        <strong>Check for new listings</strong> above to pull in matching properties.</p>
+    </div>
+  {% endif %}
+
+  {% for rec in recommendations %}
+    {% set p = rec.listing %}
+    <article class="deal-card status-{{ rec.status }}">
+      <div class="deal-main">
+        <div class="deal-header">
+          <a class="deal-address" href="{{ url_for('property_detail', property_id=p.id) }}">{{ p.address }}, {{ p.city }}, {{ p.state }} {{ p.zip_code }}</a>
+          {% if rec.status == 'new' %}<span class="badge badge-new">NEW</span>{% endif %}
+          <span class="badge badge-strategy">{{ (p.recommended_strategy or '')|replace('_', ' ')|title }}</span>
+        </div>
+        <div class="deal-tags">
+          <span class="tag">{{ p.property_type|replace('_', ' ')|title }}</span>
+          {% if p.zoning_code %}<span class="tag">Zoning: {{ p.zoning_code }}</span>{% endif %}
+          <span class="tag">Matched: {{ rec.criteria.name }}</span>
+        </div>
+        <div class="deal-reasons">
+          {% for reason in rec.reasons[:3] %}
+            <div class="reason">• {{ reason }}</div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="deal-metrics">
+        <div class="metric"><span class="metric-value">${{ "{:,.0f}".format(p.list_price) }}</span><span class="metric-label">List price</span></div>
+        <div class="metric"><span class="metric-value">{{ "%.2f"|format((p.cap_rate or 0) * 100) }}%</span><span class="metric-label">Cap rate</span></div>
+        <div class="metric"><span class="metric-value">{{ "%.2f"|format((p.cash_on_cash or 0) * 100) }}%</span><span class="metric-label">Cash-on-cash</span></div>
+        <div class="metric"><span class="metric-value">{{ "%.0f"|format(rec.match_score) }}</span><span class="metric-label">Match score</span></div>
+      </div>
+      <div class="deal-actions">
+        <form method="post" action="{{ url_for('update_recommendation_status', rec_id=rec.id) }}">
+          <input type="hidden" name="status" value="saved">
+          <button type="submit" class="btn-secondary">Save</button>
+        </form>
+        <form method="post" action="{{ url_for('update_recommendation_status', rec_id=rec.id) }}">
+          <input type="hidden" name="status" value="dismissed">
+          <button type="submit" class="btn-secondary">Dismiss</button>
+        </form>
+      </div>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

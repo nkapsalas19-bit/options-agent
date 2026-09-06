@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Saved Searches — Deal Tracker{% endblock %}
+
+{% block content %}
+<h1>Saved Searches</h1>
+<p class="subtitle">Every new listing is checked against these profiles. Matches show up on your dashboard as recommendations.</p>
+
+<section class="panel">
+  <h2>New saved search</h2>
+  <form method="post" action="{{ url_for('criteria_create') }}" class="criteria-form">
+    <label>Name
+      <input type="text" name="name" placeholder="e.g. Austin multifamily value-add" required>
+    </label>
+
+    <label>Locations (comma-separated cities, states, or zips)
+      <input type="text" name="locations" placeholder="Austin, Tampa, 78701">
+    </label>
+
+    <label>Property types (select any)
+      <select name="property_types" multiple size="6">
+        {% for pt in property_types %}
+          <option value="{{ pt }}">{{ pt.replace('_', ' ')|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Zoning codes (comma-separated prefixes, optional)
+      <input type="text" name="zoning_codes" placeholder="R3, MU">
+    </label>
+
+    <label>Min price
+      <input type="number" step="1000" name="min_price">
+    </label>
+
+    <label>Max price
+      <input type="number" step="1000" name="max_price">
+    </label>
+
+    <label>Min cap rate (%)
+      <input type="number" step="0.1" name="min_cap_rate" placeholder="e.g. 6">
+    </label>
+
+    <label>Min lot size (sqft, useful for development plays)
+      <input type="number" step="100" name="min_lot_size_sqft">
+    </label>
+
+    <label>Strategy
+      <select name="strategy">
+        {% for s in strategies %}
+          <option value="{{ s }}">{{ s.replace('_', ' ')|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <button type="submit">Create saved search</button>
+  </form>
+</section>
+
+<section class="criteria-list">
+  {% for c in all_criteria %}
+    <article class="panel criteria-card {% if not c.active %}inactive{% endif %}">
+      <div class="criteria-card-header">
+        <h3>{{ c.name }}</h3>
+        <span class="badge {% if c.active %}badge-new{% endif %}">{{ 'Active' if c.active else 'Paused' }}</span>
+      </div>
+      <ul class="criteria-summary">
+        {% if c.location_list %}<li>Locations: {{ c.location_list|join(', ') }}</li>{% endif %}
+        {% if c.property_type_list %}<li>Types: {{ c.property_type_list|join(', ') }}</li>{% endif %}
+        {% if c.zoning_code_list %}<li>Zoning: {{ c.zoning_code_list|join(', ') }}</li>{% endif %}
+        {% if c.min_price or c.max_price %}<li>Price: ${{ "{:,.0f}".format(c.min_price or 0) }} – {{ "${:,.0f}".format(c.max_price) if c.max_price else 'no max' }}</li>{% endif %}
+        {% if c.min_cap_rate %}<li>Min cap rate: {{ "%.1f"|format(c.min_cap_rate * 100) }}%</li>{% endif %}
+        {% if c.min_lot_size_sqft %}<li>Min lot size: {{ "{:,.0f}".format(c.min_lot_size_sqft) }} sqft</li>{% endif %}
+        <li>Strategy: {{ c.strategy.replace('_', ' ')|title }}</li>
+      </ul>
+      <div class="deal-actions">
+        <form method="post" action="{{ url_for('criteria_toggle', criteria_id=c.id) }}">
+          <button type="submit" class="btn-secondary">{{ 'Pause' if c.active else 'Activate' }}</button>
+        </form>
+        <form method="post" action="{{ url_for('criteria_delete', criteria_id=c.id) }}" onsubmit="return confirm('Delete this saved search?');">
+          <button type="submit" class="btn-secondary">Delete</button>
+        </form>
+      </div>
+    </article>
+  {% else %}
+    <p>No saved searches yet — create one above.</p>
+  {% endfor %}
+</section>
+{% endblock %}

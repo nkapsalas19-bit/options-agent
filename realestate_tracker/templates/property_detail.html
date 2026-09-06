@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}{{ prop.address }} — Deal Tracker{% endblock %}
+
+{% block content %}
+<a href="{{ url_for('dashboard') }}">&larr; Back to dashboard</a>
+
+<h1>{{ prop.address }}</h1>
+<p class="subtitle">{{ prop.city }}, {{ prop.state }} {{ prop.zip_code }}{% if prop.county %} &middot; {{ prop.county }} County{% endif %}</p>
+
+<div class="detail-grid">
+  <section class="panel">
+    <h2>Overview</h2>
+    <table class="kv-table">
+      <tr><th>Property type</th><td>{{ prop.property_type|replace('_', ' ')|title }}</td></tr>
+      <tr><th>Zoning</th><td>{{ prop.zoning_code or '—' }} {% if prop.zoning_description %}({{ prop.zoning_description }}){% endif %}</td></tr>
+      <tr><th>Existing / allowed units</th><td>{{ prop.existing_units or '—' }} / {{ prop.allowed_units or '—' }}</td></tr>
+      <tr><th>Lot size</th><td>{{ "{:,.0f}".format(prop.lot_size_sqft) if prop.lot_size_sqft else '—' }} sqft</td></tr>
+      <tr><th>Building size</th><td>{{ "{:,.0f}".format(prop.building_size_sqft) if prop.building_size_sqft else '—' }} sqft</td></tr>
+      <tr><th>Year built</th><td>{{ prop.year_built or '—' }}</td></tr>
+      <tr><th>Status</th><td>{{ prop.status|title }}</td></tr>
+      {% if prop.listing_url %}<tr><th>Listing</th><td><a href="{{ prop.listing_url }}" target="_blank" rel="noopener">View original listing</a></td></tr>{% endif %}
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Financials</h2>
+    <table class="kv-table">
+      <tr><th>List price</th><td>${{ "{:,.0f}".format(prop.list_price) }}</td></tr>
+      <tr><th>Price / sqft</th><td>{{ "${:,.0f}".format(prop.price_per_sqft) if prop.price_per_sqft else '—' }}</td></tr>
+      <tr><th>Price / unit</th><td>{{ "${:,.0f}".format(prop.price_per_unit) if prop.price_per_unit else '—' }}</td></tr>
+      <tr><th>Annual property tax</th><td>{{ "${:,.0f}".format(prop.annual_property_tax) if prop.annual_property_tax else '—' }}</td></tr>
+      <tr><th>Est. monthly rent</th><td>{{ "${:,.0f}".format(prop.estimated_rent_monthly) if prop.estimated_rent_monthly else '—' }}</td></tr>
+      <tr><th>Est. annual NOI</th><td>{{ "${:,.0f}".format(prop.noi_annual) if prop.noi_annual is not none else '—' }}</td></tr>
+      <tr><th>Cap rate</th><td><strong>{{ "%.2f"|format((prop.cap_rate or 0) * 100) }}%</strong></td></tr>
+      <tr><th>Cash-on-cash return</th><td><strong>{{ "%.2f"|format((prop.cash_on_cash or 0) * 100) }}%</strong></td></tr>
+      <tr><th>Est. monthly cash flow</th><td>{{ "${:,.0f}".format(prop.monthly_cash_flow) if prop.monthly_cash_flow is not none else '—' }}</td></tr>
+    </table>
+    <p class="fine-print">NOI and financing figures are estimates based on configurable assumptions (vacancy, insurance, maintenance, management, down payment %, interest rate) — see config.py. Verify with real quotes before acting.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Investment fit</h2>
+    <div class="score-bars">
+      <div class="score-bar-row">
+        <span>Buy &amp; hold fit</span>
+        <div class="score-bar"><div class="score-bar-fill" style="width: {{ prop.buy_hold_score or 0 }}%"></div></div>
+        <span>{{ "%.0f"|format(prop.buy_hold_score or 0) }}</span>
+      </div>
+      <div class="score-bar-row">
+        <span>Development fit</span>
+        <div class="score-bar"><div class="score-bar-fill dev" style="width: {{ prop.development_score or 0 }}%"></div></div>
+        <span>{{ "%.0f"|format(prop.development_score or 0) }}</span>
+      </div>
+    </div>
+    <p><strong>Recommended strategy:</strong> {{ (prop.recommended_strategy or '')|replace('_', ' ')|title }}</p>
+    <h3>Why</h3>
+    <ul>
+      {% for reason in prop.reasons %}
+        <li>{{ reason }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {% if recommendations %}
+  <section class="panel">
+    <h2>Matched saved searches</h2>
+    <ul>
+      {% for rec in recommendations %}
+        <li>{{ rec.criteria.name }} — match score {{ "%.0f"|format(rec.match_score) }} ({{ rec.status }})</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
