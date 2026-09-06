@@ -17,6 +17,7 @@ through Flask.
 """
 import sys
 import os
+import json
 from functools import wraps
 from datetime import datetime, timedelta
 
@@ -305,6 +306,25 @@ def chain(ticker):
             "ticker": ticker, "expiration": expiration, "spot": round(spot, 2), "is_synthetic": True,
             "calls": calls_out, "puts": puts_out,
         })
+
+
+SCANNER_RESULTS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scanner_results.json"
+)
+
+
+@app.route("/api/scanner")
+@login_required
+def scanner_results():
+    """Reads the latest output of market_scanner.py, run separately (python
+    market_scanner.py) since a full universe sweep is too slow for a web request."""
+    if not os.path.exists(SCANNER_RESULTS_PATH):
+        return jsonify({
+            "generated_at": None, "universe_size": 0, "cycle_seconds": None, "callouts": [],
+            "note": "Scanner hasn't run yet. Start it separately with: python market_scanner.py",
+        })
+    with open(SCANNER_RESULTS_PATH) as f:
+        return jsonify(json.load(f))
 
 
 if __name__ == "__main__":

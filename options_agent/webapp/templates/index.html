@@ -272,6 +272,52 @@
     color: var(--text);
   }
   tr.atm-row td { background: rgba(240,185,11,0.08); }
+
+  .scanner-section {
+    background: var(--panel);
+    border-top: 1px solid var(--panel-border);
+    padding: 16px 20px 24px;
+  }
+  .scanner-header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 10px;
+  }
+  .scanner-meta {
+    font-size: 10px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .scanner-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 16px 0;
+  }
+  td.direction-bullish { color: var(--green); font-weight: 600; }
+  td.direction-bearish { color: var(--red); font-weight: 600; }
+  .conf-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+  .conf-bar-track {
+    width: 60px; height: 6px;
+    background: rgba(107,114,128,0.2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .conf-bar-fill {
+    height: 100%;
+    background: var(--blue);
+  }
+  td.reasons-cell {
+    text-align: left;
+    color: var(--text-dim);
+    font-size: 10px;
+    max-width: 320px;
+  }
 </style>
 </head>
 <body>
@@ -362,6 +408,34 @@
       <div class="chain-col-title put">PUTS</div>
       <table id="putsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
     </div>
+  </div>
+</div>
+
+<div class="scanner-section">
+  <div class="scanner-header">
+    <div class="panel-title" style="margin:0;">Market Scanner — News + Technicals Callouts</div>
+    <span class="scanner-meta" id="scannerMeta">not run yet</span>
+  </div>
+  <div id="scannerEmpty" class="scanner-empty" style="display:none;"></div>
+  <table id="scannerTable" style="display:none;">
+    <thead>
+      <tr>
+        <th style="text-align:left;">Ticker</th>
+        <th style="text-align:left;">Timeframe</th>
+        <th style="text-align:left;">Direction</th>
+        <th style="text-align:left;">Suggested Action</th>
+        <th>Spot</th>
+        <th>Confidence</th>
+        <th style="text-align:left;">Reasons</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <div class="footer-note">
+    Confidence is a transparent 0-100 rule score (technical agreement + news sentiment
+    alignment) computed by scanner.py -- it is NOT a win-rate or a guarantee. Run
+    <code>python market_scanner.py</code> separately to populate this table; it polls
+    on <code>config.SCAN_INTERVAL_SECONDS</code>, not truly every second (see README).
   </div>
 </div>
 
@@ -531,6 +605,62 @@ function fillChainTable(tableId, rows, spot) {
   });
 }
 
+async function loadScanner() {
+  try {
+    const res = await fetch('/api/scanner');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) return;
+    const d = await res.json();
+
+    const meta = document.getElementById('scannerMeta');
+    if (d.generated_at) {
+      meta.textContent = `${d.callouts.length} callouts · ${d.universe_size} tickers scanned · ${d.cycle_seconds}s cycle · updated ${d.generated_at}`;
+    } else {
+      meta.textContent = d.note || 'not run yet';
+    }
+
+    const table = document.getElementById('scannerTable');
+    const empty = document.getElementById('scannerEmpty');
+    const tbody = table.querySelector('tbody');
+    tbody.innerHTML = '';
+
+    if (!d.callouts || d.callouts.length === 0) {
+      table.style.display = 'none';
+      empty.style.display = 'block';
+      empty.textContent = d.generated_at
+        ? 'No callouts above the confidence threshold this cycle.'
+        : (d.note || 'Scanner has not run yet.');
+      return;
+    }
+
+    empty.style.display = 'none';
+    table.style.display = 'table';
+
+    d.callouts.forEach(c => {
+      const tr = document.createElement('tr');
+      const dirClass = c.direction === 'BULLISH' ? 'direction-bullish' : 'direction-bearish';
+      const reasons = (c.reasons || []).join('; ');
+      tr.innerHTML = `
+        <td style="text-align:left;">${c.ticker}</td>
+        <td style="text-align:left;">${c.timeframe}</td>
+        <td class="${dirClass}" style="text-align:left;">${c.direction}</td>
+        <td style="text-align:left;">${c.suggested_action}</td>
+        <td>$${c.spot.toFixed(2)}</td>
+        <td>
+          <div class="conf-bar-wrap">
+            <span>${c.confidence_score.toFixed(0)}</span>
+            <div class="conf-bar-track"><div class="conf-bar-fill" style="width:${Math.min(c.confidence_score, 100)}%"></div></div>
+          </div>
+        </td>
+        <td class="reasons-cell" title="${reasons}">${reasons}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch (e) {
+    // stay quiet; the chart panel already surfaces connection errors
+  }
+}
+
 document.querySelectorAll('.seg-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
@@ -565,7 +695,9 @@ document.getElementById('expirationSelect').addEventListener('change', (e) => {
 populatePeriods();
 refreshAll();
 loadExpirations();
+loadScanner();
 setInterval(refreshAll, 60000); // poll every 60s
+setInterval(loadScanner, 60000);
 </script>
 
 </body>

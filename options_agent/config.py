@@ -52,3 +52,26 @@ STARTING_CAPITAL = 10000.00
 
 # ---- Backtest evaluation ----
 BACKTEST_METRICS_MIN_TRADES = 20   # don't trust a strategy's stats below this trade count
+
+# ---- Market scanner (news + technicals across a ticker universe, multiple timeframes) ----
+# Honest limitation: this polls free data/news sources on SCAN_INTERVAL_SECONDS. Neither
+# yfinance nor free news endpoints push true per-second updates -- a full sweep of the
+# configured universe takes real wall-clock time (market_scanner.py prints it each cycle).
+# Set SCAN_INTERVAL_SECONDS to at least that duration, or switch to a smaller watchlist.
+SCANNER_UNIVERSE_MODE = "sp500"    # "sp500" (live Wikipedia fetch, falls back to a curated liquid subset -- see universe.py) or "watchlist"
+SCANNER_WATCHLIST = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD"]
+SCAN_INTERVAL_SECONDS = 300
+NEWS_LOOKBACK_HOURS = 24
+MIN_CONFIDENCE_SCORE = 60     # callouts scoring below this are discarded entirely, not just hidden in the UI
+ALERT_MIN_CONFIDENCE = 75     # only email/SMS-alert on higher conviction than the dashboard's minimum
+SWING_TARGET_DTE_DAYS = 21    # longer-dated option alt offered alongside the primary "buy shares" swing call
+DEFAULT_IV_FALLBACK = 0.30    # rough placeholder IV for tickers not in DEFAULT_IV -- this is not calibrated to any real skew
+
+# ---- Email alerts (Gmail SMTP) ----
+# Set these as environment variables -- never hardcode credentials in this file:
+#   GMAIL_ADDRESS       the Gmail account to send alerts from
+#   GMAIL_APP_PASSWORD  a 16-character App Password (NOT your normal Gmail password);
+#                        generate one at https://myaccount.google.com/apppasswords
+#                        (requires 2-Step Verification enabled on that Google account)
+#   ALERT_TO_EMAIL      recipient address (defaults to GMAIL_ADDRESS itself if unset)
+# If these aren't set, alerts.py prints the alert to the console instead of failing.
