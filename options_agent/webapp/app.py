@@ -19,7 +19,9 @@ import sys
 import os
 import json
 import re
+import hmac
 import threading
+import time
 from functools import wraps
 from datetime import datetime, timedelta
 
@@ -329,6 +331,8 @@ def watchlist():
         "mode": config.SCANNER_UNIVERSE_MODE,
         "tickers": get_scan_universe(),
         "top30": config.TOP_30_MOST_TRADED,
+        "auto_scan_enabled": _AUTO_SCAN_ENABLED,
+        "scan_interval_seconds": config.SCAN_INTERVAL_SECONDS,
     })
 
 
@@ -407,6 +411,24 @@ def _run_scan_job(tickers=None):
         _scan_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
 
 
+def _try_start_scan(tickers=None):
+    """Shared by the "Scan Now" button, the auto-scan loop, and the external
+    cron endpoint below -- one lock/job-state, so all three ways of starting
+    a scan correctly see each other as "already running" instead of piling
+    up overlapping sweeps. Returns True if a scan was actually started."""
+    if not _scan_lock.acquire(blocking=False):
+        return False
+    try:
+        if _scan_job["running"]:
+            return False
+        _scan_job.update(running=True, started_at=datetime.now().isoformat(timespec="seconds"),
+                          finished_at=None, error=None)
+        threading.Thread(target=_run_scan_job, kwargs={"tickers": tickers}, daemon=True).start()
+        return True
+    finally:
+        _scan_lock.release()
+
+
 @app.route("/api/scan", methods=["POST"])
 @login_required
 def start_scan():
@@ -415,23 +437,63 @@ def start_scan():
     if payload.get("tickers") and not custom_tickers:
         return jsonify({"status": "error", "error": "No valid tickers in request"}), 400
 
-    if not _scan_lock.acquire(blocking=False):
+    if not _try_start_scan(custom_tickers):
         return jsonify({"status": "already_running", "job": _scan_job}), 409
-    try:
-        if _scan_job["running"]:
-            return jsonify({"status": "already_running", "job": _scan_job}), 409
-        _scan_job.update(running=True, started_at=datetime.now().isoformat(timespec="seconds"),
-                          finished_at=None, error=None)
-        threading.Thread(target=_run_scan_job, kwargs={"tickers": custom_tickers}, daemon=True).start()
-        return jsonify({"status": "started", "job": _scan_job})
-    finally:
-        _scan_lock.release()
+    return jsonify({"status": "started", "job": _scan_job})
 
 
 @app.route("/api/scan/status")
 @login_required
 def scan_status():
     return jsonify(_scan_job)
+
+
+# ---- Automatic scanning, so nobody has to keep clicking "Scan Now" ----
+#
+# Layer 1 (always on, zero setup): a background thread started when this process
+# boots re-scans every config.SCAN_INTERVAL_SECONDS for as long as the process is
+# alive. On Render's free tier the process is only alive while the service is
+# awake -- it spins down after ~15 minutes with no HTTP traffic, which stops this
+# loop too. Set AUTO_SCAN_ENABLED=false to turn it off (e.g. if you ever run more
+# than one worker process, since each worker would otherwise run its own loop --
+# Render's free tier defaults to a single worker, so this isn't a concern there).
+#
+# Layer 2 (optional, keeps it fresh even when nobody's visiting): see
+# /api/cron/scan below and README.md's "Fully automatic scanning" section --
+# point a free external scheduler at that URL and it both wakes the service up
+# AND triggers a scan, closing the gap Layer 1 alone can't on a free instance.
+def _auto_scan_loop():
+    time.sleep(20)  # let the process finish booting before the first automatic sweep
+    while True:
+        _try_start_scan()  # no-ops quietly if a manual scan is already in flight
+        while _scan_job["running"]:
+            time.sleep(2)
+        time.sleep(config.SCAN_INTERVAL_SECONDS)
+
+
+_AUTO_SCAN_ENABLED = os.environ.get("AUTO_SCAN_ENABLED", "true").strip().lower() not in ("false", "0", "no")
+# Guard against Werkzeug's debug-mode reloader double-importing this module and
+# starting two competing loops in local dev; irrelevant under gunicorn (no reloader).
+_should_start_auto_scan = _AUTO_SCAN_ENABLED and (not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true")
+if _should_start_auto_scan:
+    threading.Thread(target=_auto_scan_loop, daemon=True).start()
+
+
+@app.route("/api/cron/scan", methods=["GET", "POST"])
+def cron_scan():
+    """No @login_required -- an external scheduler (cron-job.org, UptimeRobot,
+    etc.) can't do a session login. Protected by a shared-secret token instead;
+    refuses everything until CRON_SECRET is explicitly set, so this endpoint is
+    inert by default rather than an open trigger."""
+    secret = os.environ.get("CRON_SECRET")
+    if not secret:
+        return jsonify({"error": "CRON_SECRET is not configured on the server"}), 503
+    provided = request.args.get("token") or request.headers.get("X-Cron-Token", "")
+    if not hmac.compare_digest(provided, secret):
+        return jsonify({"error": "unauthorized"}), 401
+    if not _try_start_scan():
+        return jsonify({"status": "already_running"})
+    return jsonify({"status": "started"})
 
 
 def _run_backtest_job():

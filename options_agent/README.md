@@ -303,6 +303,49 @@ Both write to the same JSON files the dashboard's buttons produce
 script and the on-demand buttons interchange freely — whichever ran most
 recently is what the dashboard shows.
 
+### Fully automatic scanning — no clicking required
+
+The dashboard scans itself. A background thread starts when the web
+service boots and re-scans every `config.SCAN_INTERVAL_SECONDS` (default
+5 minutes) for as long as the process stays alive — you'll see a green
+**"🔄 Auto-scanning every ~5 min..."** line in the Market Scanner panel
+confirming it's on. It shares the same job lock as the "Scan Now" button,
+so the two never collide or double up. Set the environment variable
+`AUTO_SCAN_ENABLED=false` to turn it off (e.g. if you ever run more than
+one worker process, since each would otherwise run its own loop — Render's
+free tier defaults to a single worker, so this isn't a concern there).
+
+**The catch, and it's a real one**: Render's free tier spins the whole
+service down after ~15 minutes with no HTTP traffic, which stops this
+background thread along with everything else. Auto-scanning only runs
+while something is keeping the service awake — which happens naturally
+if you (or anyone) has the dashboard open, since the page's own periodic
+requests count as traffic.
+
+**To keep it scanning even when nobody's looking at the page**, point a
+free external scheduler at a special endpoint that both wakes the service
+up and triggers a scan:
+
+1. Set an environment variable `CRON_SECRET` to any long random string
+   (same place as `DASHBOARD_PASSWORD`). This endpoint refuses every
+   request until this is set, so it's harmless to leave configured.
+2. Sign up for a free scheduler like [cron-job.org](https://cron-job.org)
+   (no card required) and create a job that sends a GET request every
+   5-10 minutes to:
+   ```
+   https://your-app-name.onrender.com/api/cron/scan?token=YOUR_CRON_SECRET
+   ```
+3. That's it — every ping wakes the service (if it was asleep) and starts
+   a scan (if one isn't already running).
+
+This endpoint deliberately doesn't use the dashboard password — an
+external scheduler can't do a browser login — it's protected by the
+`CRON_SECRET` token instead, checked with a constant-time comparison.
+Anyone who obtained that token could trigger extra scans (wasted API
+calls, not a security or financial risk, since this is still paper
+trading), so treat it with the same care as any other secret, but it's
+not something to lose sleep over.
+
 ### Accessing the dashboard from your phone or another computer
 
 `python webapp/app.py` only serves `http://localhost:5000` — reachable

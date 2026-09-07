@@ -801,7 +801,8 @@
     <button class="picker-toggle-btn" id="tickerPickerToggle">🔧 Customize Tickers</button>
     <span class="scanner-meta" id="scannerMeta">not run yet</span>
   </div>
-  <div class="scanner-meta" id="watchlistLine" style="margin-bottom:12px;">loading watchlist…</div>
+  <div class="scanner-meta" id="watchlistLine" style="margin-bottom:6px;">loading watchlist…</div>
+  <div class="scanner-meta" id="autoScanLine" style="margin-bottom:12px; color:var(--green); display:none;"></div>
 
   <div class="picker-panel" id="tickerPickerPanel">
     <div class="picker-hint">
@@ -1444,6 +1445,15 @@ async function loadWatchlist() {
     const line = document.getElementById('watchlistLine');
     line.textContent = `Configured to scan (${d.mode} mode): ${d.tickers.join(', ')}`;
     buildTickerPicker(d.top30 || [], d.tickers || []);
+
+    const autoLine = document.getElementById('autoScanLine');
+    if (d.auto_scan_enabled) {
+      const mins = Math.round(d.scan_interval_seconds / 60);
+      autoLine.textContent = `🔄 Auto-scanning every ~${mins} min while this service is awake — no need to click "Scan Now" yourself.`;
+      autoLine.style.display = 'block';
+    } else {
+      autoLine.style.display = 'none';
+    }
   } catch (e) {
     // stay quiet; not critical
   }
