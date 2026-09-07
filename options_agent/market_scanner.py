@@ -76,6 +76,29 @@ def _format_alert(c):
     return subject, body
 
 
+def _format_close_alert(t):
+    pnl = t["proceeds"] - t["cost"]
+    sign = "+" if pnl >= 0 else "-"
+    reason_label = {"target": "hit its profit target", "stop": "hit its stop-loss",
+                    "time_stop": "timed out (hit its max hold window) and was closed at the last price"}.get(
+        t["exit_reason"], t["exit_reason"])
+    subject = f"[Challenge] {t['ticker']} closed -- {sign}${abs(pnl):.2f} ({t['exit_reason']})"
+    detail = (f"{t['qty']} {'shares' if t['instrument'] == 'shares' else 'contract(s)'} of "
+              f"{t['ticker']}" + (f" ({t['option_type']} ${t['strike']} exp {t['expiration_date']})"
+                                   if t["instrument"] == "option" else ""))
+    body = (
+        f"Challenge position {reason_label}.\n\n"
+        f"{detail}\n"
+        f"Entered {t['entry_date']} @ ${t['entry_price']}\n"
+        f"Exited  {t['exit_date']} @ ${t['exit_price']}\n\n"
+        f"P&L: {sign}${abs(pnl):.2f}  (cost ${t['cost']} -> proceeds ${t['proceeds']})\n\n"
+        "This was resolved automatically against historical/delayed bar data, not a live "
+        "broker fill -- if you're actually holding this trade, go check your real position; "
+        "this alert is a reminder to act, not a confirmation that anything sold."
+    )
+    return subject, body
+
+
 def run_once(tickers=None):
     """tickers, if given, overrides config-derived universe for just this run
     (e.g. the dashboard's "Scan These Tickers" picker) without touching
@@ -109,7 +132,10 @@ def run_once(tickers=None):
 
     if challenge.get_challenge():
         try:
-            challenge.check_open_positions()
+            _, newly_closed = challenge.check_open_positions()
+            for t in newly_closed:
+                subject, body = _format_close_alert(t)
+                send_email_alert(subject, body)
         except Exception as e:
             print(f"[scanner] challenge position check failed: {e}")
 

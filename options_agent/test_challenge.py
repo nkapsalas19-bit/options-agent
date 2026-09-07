@@ -7,7 +7,7 @@ actual exit date/price rather than reusing a stale premium guess) -- it
 says nothing about whether any of this makes money. This is a paper-trading
 tracker, not a guarantee.
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -40,6 +40,24 @@ def flat_then_move_df(days=5, jump_high=None, jump_low=None, jump_close=None):
     if jump_close is not None:
         close[1:] = [jump_close] * (days - 1)
     return pd.DataFrame({"open": close, "high": high, "low": low, "close": close, "volume": 1_000_000}, index=dates)
+
+
+def flat_then_move_intraday_df(bars=6, jump_high=None, jump_low=None, jump_close=None):
+    """15-minute bars starting a few minutes in the future (so they land
+    strictly after "now", matching what a real fetch would return once time
+    has passed since entry) -- lets intraday same-day resolution be tested
+    without waiting on a real clock."""
+    dates = pd.date_range(start=pd.Timestamp.now() + pd.Timedelta(minutes=1), periods=bars, freq="15min")
+    high = [101] * bars
+    low = [99] * bars
+    close = [100] * bars
+    if jump_high is not None:
+        high[1:] = [jump_high] * (bars - 1)
+    if jump_low is not None:
+        low[1:] = [jump_low] * (bars - 1)
+    if jump_close is not None:
+        close[1:] = [jump_close] * (bars - 1)
+    return pd.DataFrame({"open": close, "high": high, "low": low, "close": close, "volume": 100_000}, index=dates)
 
 
 def main():
@@ -81,8 +99,9 @@ def main():
 
     print("\n=== 5. check_open_positions resolves to TARGET correctly and computes P&L ===")
     challenge.fetch_daily = lambda ticker, period=None: flat_then_move_df(jump_high=108, jump_low=105, jump_close=107)
-    trades = challenge.check_open_positions()
+    trades, newly_closed = challenge.check_open_positions()
     print(trades[0])
+    assert len(newly_closed) == 1 and newly_closed[0]["id"] == trades[0]["id"]
     assert trades[0]["status"] == "closed"
     assert trades[0]["exit_reason"] == "target"
     assert trades[0]["exit_price"] == 106.0  # exits AT the target level, not the overshoot close
@@ -99,7 +118,7 @@ def main():
     challenge.add_trade("TEST", "swing", sizing)
     # both stop (97) and target (106) crossed within the same forward window
     challenge.fetch_daily = lambda ticker, period=None: flat_then_move_df(jump_high=110, jump_low=90, jump_close=100)
-    trades = challenge.check_open_positions()
+    trades, _ = challenge.check_open_positions()
     print(trades[0]["exit_reason"], trades[0]["exit_price"])
     assert trades[0]["exit_reason"] == "stop"
     assert trades[0]["exit_price"] == 97.0
@@ -112,12 +131,13 @@ def main():
     trade = challenge.add_trade("TEST", "swing", sizing)
     trade["max_hold_days"] = 2  # force a short hold window for the test instead of waiting out the real default
     challenge._save_json(challenge.TRADES_PATH, [trade])
-    # entry_date backdated so "days held" exceeds max_hold_days immediately
+    # entry_date/entry_time backdated so "days held" exceeds max_hold_days immediately
     trades = challenge._load_json(challenge.TRADES_PATH, [])
     trades[0]["entry_date"] = (date.today() - timedelta(days=5)).isoformat()
+    trades[0]["entry_time"] = (datetime.now() - timedelta(days=5)).isoformat(timespec="seconds")
     challenge._save_json(challenge.TRADES_PATH, trades)
     challenge.fetch_daily = lambda ticker, period=None: flat_then_move_df()  # never reaches target/stop
-    trades = challenge.check_open_positions()
+    trades, _ = challenge.check_open_positions()
     print(trades[0]["exit_reason"])
     assert trades[0]["exit_reason"] == "time_stop"
 
@@ -128,11 +148,36 @@ def main():
     callout2 = make_shares_callout()
     sizing = challenge.suggest_position_size(callout2, cfg, current_balance=5000)
     trade = challenge.add_trade("TEST", "intraday", sizing)
-    challenge.fetch_daily = lambda ticker, period=None: flat_then_move_df(jump_high=108, jump_low=105, jump_close=107)
-    trades = challenge.check_open_positions()
+    challenge.fetch_intraday = lambda ticker, interval=None, period=None: flat_then_move_intraday_df(jump_high=108, jump_low=105, jump_close=107)
+    trades, newly_closed = challenge.check_open_positions()
     print(trades[0])
     assert trades[0]["status"] == "closed"
     assert trades[0]["exit_price"] > sizing["entry_price"], "underlying rallied to target -- option should be worth more at exit"
+    assert len(newly_closed) == 1
+
+    print("\n=== 9. Intraday positions resolve SAME DAY (the bug this covers: entry-day bars used to be excluded entirely) ===")
+    challenge.clear_challenge()
+    cfg = challenge.set_challenge(date.today().isoformat(), (date.today() + timedelta(days=30)).isoformat(),
+                                   5000, 8000, "option", risk_pct_per_trade=5.0)
+    trade = challenge.add_trade("TEST", "intraday", sizing)
+    # bars start ~1 minute after entry_time (set just now by add_trade) -- same calendar day
+    challenge.fetch_intraday = lambda ticker, interval=None, period=None: flat_then_move_intraday_df(jump_high=108, jump_low=105, jump_close=107)
+    trades, newly_closed = challenge.check_open_positions()
+    assert trades[0]["status"] == "closed", "same-day intraday resolution should not require waiting for a new calendar day"
+    assert len(newly_closed) == 1
+
+    print("\n=== 10. Intraday time-stop fires on elapsed wall-clock minutes, not calendar days ===")
+    challenge.clear_challenge()
+    cfg = challenge.set_challenge(date.today().isoformat(), (date.today() + timedelta(days=30)).isoformat(),
+                                   5000, 8000, "option", risk_pct_per_trade=5.0)
+    trade = challenge.add_trade("TEST", "intraday", sizing)
+    trade["entry_time"] = (datetime.now() - timedelta(hours=4)).isoformat(timespec="seconds")  # older than INTRADAY_MAX_HOLD_BARS*15min
+    challenge._save_json(challenge.TRADES_PATH, [trade])
+    challenge.fetch_intraday = lambda ticker, interval=None, period=None: flat_then_move_intraday_df()  # never hits target/stop
+    trades, newly_closed = challenge.check_open_positions()
+    print(trades[0]["exit_reason"])
+    assert trades[0]["exit_reason"] == "time_stop"
+    assert len(newly_closed) == 1
 
     challenge.clear_challenge()
     print("\n=== CHALLENGE VALIDATION: PASSED ===")

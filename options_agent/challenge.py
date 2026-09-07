@@ -26,7 +26,7 @@ import os
 from datetime import datetime, date, timedelta
 
 import config
-from data_fetcher import fetch_daily
+from data_fetcher import fetch_daily, fetch_intraday
 from options_pricing import bs_price
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "challenge_config.json")
@@ -180,11 +180,13 @@ def suggest_position_size(callout, cfg, current_balance):
 
 def add_trade(ticker, timeframe, sizing):
     trades = _load_json(TRADES_PATH, [])
+    now = datetime.now()
     trade = {
         "id": (trades[-1]["id"] + 1) if trades else 1,
         "ticker": ticker, "timeframe": timeframe,
         "instrument": sizing["instrument"], "qty": sizing["qty"],
         "entry_price": sizing["entry_price"], "entry_date": date.today().isoformat(),
+        "entry_time": now.isoformat(timespec="seconds"),  # naive local time; used for intraday same-day resolution
         "cost": sizing["cost"], "status": "open", "proceeds": None,
         "exit_price": None, "exit_date": None, "exit_reason": None,
     }
@@ -205,10 +207,34 @@ def add_trade(ticker, timeframe, sizing):
     return trade
 
 
-def _resolve_shares(t, df, entry_date):
-    recent = df[df.index.date > entry_date]
-    if recent.empty:
-        return None
+def _entry_time(t):
+    """Trades added before entry_time was tracked only have entry_date --
+    fall back to midnight of that day (same as the old behavior)."""
+    if t.get("entry_time"):
+        return datetime.fromisoformat(t["entry_time"])
+    return datetime.strptime(t["entry_date"], "%Y-%m-%d")
+
+
+def _recent_bars_for(t):
+    """Bars strictly after entry, using whichever granularity matches how
+    the position is actually meant to resolve: 15-minute bars for intraday
+    (options-only) positions so a same-day target/stop/time-stop can
+    trigger, daily bars for swing positions. Returns (recent_df, entry_time)
+    or (None, entry_time) if nothing fetchable/new yet."""
+    entry_time = _entry_time(t)
+    if t.get("timeframe") == "intraday":
+        df = fetch_intraday(t["ticker"], interval="15m", period="5d")
+        if df.index.tz is not None:
+            df = df.tz_localize(None)
+        recent = df[df.index > entry_time]
+    else:
+        df = fetch_daily(t["ticker"], period="6mo")
+        entry_date = entry_time.date()
+        recent = df[df.index.date > entry_date]
+    return (recent if not recent.empty else None), entry_time
+
+
+def _resolve_shares(t, recent, entry_time):
     direction = 1 if t["target_price"] > t["entry_price"] else -1
     hit_stop = (recent["low"] <= t["stop_price"]).any() if direction == 1 else (recent["high"] >= t["stop_price"]).any()
     hit_target = (recent["high"] >= t["target_price"]).any() if direction == 1 else (recent["low"] <= t["target_price"]).any()
@@ -218,28 +244,32 @@ def _resolve_shares(t, df, entry_date):
     if hit_target:
         return t["target_price"], "target", t["qty"] * t["target_price"]
 
-    days_held = (date.today() - entry_date).days
+    days_held = (date.today() - entry_time.date()).days
     if days_held >= t["max_hold_days"]:
         last_price = float(recent["close"].iloc[-1])
         return last_price, "time_stop", t["qty"] * last_price
     return None
 
 
-def _resolve_option(t, df, entry_date):
-    recent = df[df.index.date > entry_date]
-    if recent.empty:
-        return None
+def _resolve_option(t, recent, entry_time):
     direction = 1 if t["underlying_target"] > t["underlying_entry"] else -1
     hit_stop = (recent["low"] <= t["underlying_stop"]).any() if direction == 1 else (recent["high"] >= t["underlying_stop"]).any()
     hit_target = (recent["high"] >= t["underlying_target"]).any() if direction == 1 else (recent["low"] <= t["underlying_target"]).any()
 
-    days_held = (date.today() - entry_date).days
+    if t.get("timeframe") == "intraday":
+        minutes_held = (datetime.now() - entry_time).total_seconds() / 60.0
+        timed_out = minutes_held >= config.INTRADAY_MAX_HOLD_BARS * 15
+        days_held = minutes_held / (60 * 24)  # for the remaining-DTE estimate below only
+    else:
+        days_held = (date.today() - entry_time.date()).days
+        timed_out = days_held >= t["dte_days"]
+
     exit_underlying, reason = None, None
     if hit_stop:
         exit_underlying, reason = t["underlying_stop"], "stop"
     elif hit_target:
         exit_underlying, reason = t["underlying_target"], "target"
-    elif days_held >= t["dte_days"]:
+    elif timed_out:
         exit_underlying, reason = float(recent["close"].iloc[-1]), "time_stop"
     else:
         return None
@@ -253,20 +283,23 @@ def _resolve_option(t, df, entry_date):
 def check_open_positions():
     """Fetches fresh data for each open position's ticker and resolves any
     that have hit target/stop/time-stop since entry. Safe to call every
-    scan cycle -- tickers with nothing new just no-op."""
+    scan cycle -- tickers with nothing new just no-op. Returns
+    (all_trades, newly_closed_trades) so callers (market_scanner.py) can
+    notify only about positions that closed just now."""
     trades = _load_json(TRADES_PATH, [])
-    changed = False
+    newly_closed = []
     for t in trades:
         if t["status"] != "open":
             continue
         try:
-            df = fetch_daily(t["ticker"], period="6mo")
+            recent, entry_time = _recent_bars_for(t)
         except Exception:
             continue
-        entry_date = datetime.strptime(t["entry_date"], "%Y-%m-%d").date()
+        if recent is None:
+            continue
 
         resolver = _resolve_shares if t["instrument"] == "shares" else _resolve_option
-        result = resolver(t, df, entry_date)
+        result = resolver(t, recent, entry_time)
         if result is None:
             continue
 
@@ -276,8 +309,8 @@ def check_open_positions():
         t["exit_date"] = date.today().isoformat()
         t["exit_reason"] = reason
         t["proceeds"] = round(proceeds, 2)
-        changed = True
+        newly_closed.append(t)
 
-    if changed:
+    if newly_closed:
         _save_json(TRADES_PATH, trades)
-    return trades
+    return trades, newly_closed

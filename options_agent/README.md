@@ -431,14 +431,23 @@ scoring doesn't actually support.
 
 It goes into a ledger (`challenge_trades.json`) as an open position, and
 **resolves automatically** — every time you run a scan (via the "Scan Now"
-button or a scheduled `market_scanner.py`), `challenge.check_open_positions()`
+button, auto-scan, or the cron endpoint), `challenge.check_open_positions()`
 fetches fresh price data for each open position's ticker and checks whether
 it's crossed its target, its stop, or exceeded its planned hold window
 since entry:
 
-- **Shares**: resolves against the underlying price directly.
-- **Options**: resolves against the *underlying's* target/stop (the same
-  levels used for the shares side of that callout), then re-prices the
+- **Shares and swing-timeframe options**: resolved against **daily** bars,
+  same as before.
+- **Intraday-timeframe options** (the short-dated, few-hour-horizon calls/
+  puts the scanner suggests for its "intraday" timeframe): resolved against
+  **15-minute bars**, so a position can hit its target/stop/time-stop the
+  *same day* it was entered instead of waiting for a bar from a later
+  calendar day that daily data wouldn't have yet. Time-stop for these is
+  based on wall-clock minutes elapsed since entry vs.
+  `config.INTRADAY_MAX_HOLD_BARS` (12 bars × 15 min ≈ 3 hours), not
+  calendar days.
+- **Options resolve against the *underlying's* target/stop** (the same
+  levels used for the shares side of that callout), then re-price the
   option with Black-Scholes at the actual exit date and underlying price —
   not the static premium target guessed at recommendation time, which
   would assume a specific number of days had passed that may not match
@@ -453,6 +462,29 @@ since entry:
 The panel shows equity, cash, realized P&L, a progress bar (your % of the
 way to the goal vs. % of the timeframe elapsed — a quick "on pace or not"
 read), and full open/closed position tables.
+
+### Notifications
+
+Two separate things get emailed (same `GMAIL_ADDRESS`/`GMAIL_APP_PASSWORD`
+setup as "Email alerts" above — no extra configuration):
+
+- **New callout found** — unchanged, deduped to once per ticker/timeframe/
+  direction/day, whenever a scan turns up a callout scoring at or above
+  `config.ALERT_MIN_CONFIDENCE`.
+- **Challenge position closed** — a new email fires the moment
+  `check_open_positions()` closes an open Challenge trade (target, stop,
+  or time-stop), with the ticker, entry/exit price, P&L, and why it closed.
+
+**Be honest with yourself about what "notification" means here**:
+resolution only happens when a scan runs, which is at most every
+`config.SCAN_INTERVAL_SECONDS` (default 5 minutes) via auto-scan, or
+whenever your external cron ping fires if you set one up. It is **not**
+a live tick-by-tick feed, and there is **no real broker connection** —
+the email is a prompt to go check and manually act in your actual
+brokerage if you're shadowing this trade for real, not a confirmation
+that anything was actually bought or sold. "Best possible time" is
+bounded by both that scan cadence and the fact this system can't execute
+anything itself.
 
 ### What this is and isn't
 
