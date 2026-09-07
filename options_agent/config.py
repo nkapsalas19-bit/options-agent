@@ -76,6 +76,18 @@ SCANNER_UNIVERSE_MODE = "watchlist"   # "watchlist" (fast, reliable -- see SCANN
 _default_watchlist = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD"]
 _watchlist_env = os.environ.get("SCANNER_WATCHLIST")
 SCANNER_WATCHLIST = [t.strip().upper() for t in _watchlist_env.split(",") if t.strip()] if _watchlist_env else _default_watchlist
+
+# A curated list for the dashboard's ticker picker. This is NOT a live, verified
+# trading-volume ranking -- there's no real-time volume feed behind it. It's a
+# reasonably defensible set of names that consistently rank among the most
+# actively traded US stocks/ETFs by share volume: mega-cap tech, popular
+# retail-trader names, and a few of the highest-volume index ETFs. Treat it as
+# "well-known liquid names to start from," not a precise top-30 leaderboard.
+TOP_30_MOST_TRADED = [
+    "SPY", "QQQ", "AAPL", "TSLA", "NVDA", "AMD", "AMZN", "MSFT", "META", "GOOGL",
+    "NFLX", "INTC", "F", "BAC", "PLTR", "SOFI", "NIO", "RIVN", "LCID", "AAL",
+    "CCL", "SNAP", "UBER", "COIN", "MARA", "RIOT", "T", "PFE", "XOM", "BABA",
+]
 SCAN_INTERVAL_SECONDS = 300
 NEWS_LOOKBACK_HOURS = 24
 MIN_CONFIDENCE_SCORE = 60     # callouts scoring below this are discarded entirely, not just hidden in the UI

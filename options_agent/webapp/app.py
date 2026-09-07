@@ -18,6 +18,7 @@ through Flask.
 import sys
 import os
 import json
+import re
 import threading
 from functools import wraps
 from datetime import datetime, timedelta
@@ -319,11 +320,15 @@ SCANNER_RESULTS_PATH = os.path.join(
 @app.route("/api/watchlist")
 @login_required
 def watchlist():
-    """What the scanner is CURRENTLY configured to scan, independent of
-    whether it's run yet -- lets the dashboard show this before the first
-    "Scan Now" click, not just after."""
+    """What the scanner is CURRENTLY configured to scan (independent of
+    whether it's run yet), plus a curated ticker list for the dashboard's
+    picker UI -- see config.TOP_30_MOST_TRADED for what it is and isn't."""
     from universe import get_scan_universe
-    return jsonify({"mode": config.SCANNER_UNIVERSE_MODE, "tickers": get_scan_universe()})
+    return jsonify({
+        "mode": config.SCANNER_UNIVERSE_MODE,
+        "tickers": get_scan_universe(),
+        "top30": config.TOP_30_MOST_TRADED,
+    })
 
 
 @app.route("/api/scanner")
@@ -374,9 +379,25 @@ _backtest_lock = threading.Lock()
 _backtest_job = {"running": False, "started_at": None, "finished_at": None, "error": None}
 
 
-def _run_scan_job():
+MAX_CUSTOM_SCAN_TICKERS = 50  # a picker-driven one-off scan is meant to be quick, not a backdoor to a full-universe sweep
+_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")  # generous but bounded: real tickers, not arbitrary input
+
+
+def _sanitize_tickers(raw):
+    seen, out = set(), []
+    for t in raw:
+        t = str(t).strip().upper()
+        if t and _TICKER_RE.match(t) and t not in seen:
+            seen.add(t)
+            out.append(t)
+        if len(out) >= MAX_CUSTOM_SCAN_TICKERS:
+            break
+    return out
+
+
+def _run_scan_job(tickers=None):
     try:
-        market_scanner.run_once()
+        market_scanner.run_once(tickers=tickers)
         _scan_job["error"] = None
     except Exception as e:
         _scan_job["error"] = str(e)
@@ -388,6 +409,11 @@ def _run_scan_job():
 @app.route("/api/scan", methods=["POST"])
 @login_required
 def start_scan():
+    payload = request.get_json(silent=True) or {}
+    custom_tickers = _sanitize_tickers(payload["tickers"]) if payload.get("tickers") else None
+    if payload.get("tickers") and not custom_tickers:
+        return jsonify({"status": "error", "error": "No valid tickers in request"}), 400
+
     if not _scan_lock.acquire(blocking=False):
         return jsonify({"status": "already_running", "job": _scan_job}), 409
     try:
@@ -395,7 +421,7 @@ def start_scan():
             return jsonify({"status": "already_running", "job": _scan_job}), 409
         _scan_job.update(running=True, started_at=datetime.now().isoformat(timespec="seconds"),
                           finished_at=None, error=None)
-        threading.Thread(target=_run_scan_job, daemon=True).start()
+        threading.Thread(target=_run_scan_job, kwargs={"tickers": custom_tickers}, daemon=True).start()
         return jsonify({"status": "started", "job": _scan_job})
     finally:
         _scan_lock.release()

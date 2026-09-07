@@ -229,21 +229,42 @@ scanner output.
   `"sp500"` once you've confirmed watchlist mode is reliable in your actual
   hosting environment.
 
-### Changing which tickers get scanned (no code editing required)
+### Changing which tickers get scanned
 
-Set an environment variable named `SCANNER_WATCHLIST` to a comma-separated
-list, e.g. `SPY,QQQ,AAPL,TSLA,COIN` — on Render, that's Settings →
-Environment → add a variable, no different from setting
-`DASHBOARD_PASSWORD`. Restart/redeploy the service to pick it up. Leave it
-unset to keep the default 10-ticker list in `config.py`.
+**On the fly, no redeploy needed:** click **"🔧 Customize Tickers"** in the
+Market Scanner panel. It opens a picker with 30 checkboxes
+(`config.TOP_30_MOST_TRADED` — a curated set of liquid, commonly
+heavily-traded US stocks/ETFs, **not** a live volume ranking, since there's
+no real-time volume feed behind this) plus a text box for any tickers not
+on that list. Check/type what you want, click **"Scan Selected"**, and it
+scans exactly that list right away — a one-off scan that doesn't touch your
+permanent configuration.
 
-The dashboard also shows exactly what's configured, right in the "Market
-Scanner" panel — a line reading "Configured to scan (watchlist mode): ..."
-before you've run a scan, and "Last scanned: ..." with the actual list
-after one completes. And the main chart at the top isn't limited to
-SPY/QQQ — there's a text box next to those buttons where you can type any
-ticker (e.g. `AAPL`) to load its chart directly, independent of the
-scanner.
+**To make a selection your permanent default**, copy the list shown at the
+bottom of the picker (there's a "Copy" button) into an environment variable
+named `SCANNER_WATCHLIST` — on Render, that's Settings → Environment → add
+a variable, no different from setting `DASHBOARD_PASSWORD`. Restart/redeploy
+to pick it up. Leave it unset to keep the default 10-ticker list in
+`config.py`.
+
+The dashboard also always shows exactly what's configured, right in the
+"Market Scanner" panel — a line reading "Configured to scan (watchlist
+mode): ..." before you've run a scan, and "Last scanned: ..." with the
+actual list used after one completes (whether that came from the default
+config or a picker-driven one-off scan). And the main chart at the top
+isn't limited to SPY/QQQ either — there's a text box next to those buttons
+where you can type any ticker (e.g. `AAPL`) to load its chart directly,
+independent of the scanner.
+
+### Getting more detail on a callout
+
+Click anywhere on a callout's row in the Market Scanner panel to expand
+it — this reveals a plain-English one-line summary of why it fired, the
+full itemized reasoning list (every rule that contributed to the score,
+with the actual numbers), the risk breakdown for both the shares and
+option legs, and the complete exit plan. Click the row again to collapse
+it. The "📈 View Chart" button inside the expanded view loads that exact
+ticker/timeframe into the main chart with entry/target/stop drawn on it.
 
 ### One-click dashboard — no terminal required after setup
 

@@ -313,6 +313,90 @@
     border-color: var(--red);
     color: var(--red);
   }
+  .picker-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+    padding: 5px 12px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .picker-toggle-btn:hover { color: var(--text); border-color: var(--text-dim); }
+  .picker-panel {
+    display: none;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 14px;
+    margin-bottom: 14px;
+    background: rgba(0,0,0,0.15);
+  }
+  .picker-panel.open { display: block; }
+  .picker-hint {
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+  .picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 6px 10px;
+    margin-bottom: 12px;
+  }
+  .picker-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text);
+  }
+  .picker-item input { accent-color: var(--blue); cursor: pointer; }
+  .picker-item label { cursor: pointer; }
+  .picker-custom-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .picker-custom-row input {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+  }
+  .picker-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .picker-selected-line {
+    font-size: 10px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--panel-border);
+    word-break: break-all;
+  }
+  .copy-btn {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+    padding: 3px 8px;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  .copy-btn:hover { color: var(--text); }
   .scanner-empty {
     font-size: 12px;
     color: var(--text-dim);
@@ -610,9 +694,34 @@
   <div class="scanner-header">
     <div class="panel-title" style="margin:0;">Market Scanner — News + Technicals Callouts</div>
     <button class="run-btn" id="runScanBtn">Scan Now</button>
+    <button class="picker-toggle-btn" id="tickerPickerToggle">🔧 Customize Tickers</button>
     <span class="scanner-meta" id="scannerMeta">not run yet</span>
   </div>
   <div class="scanner-meta" id="watchlistLine" style="margin-bottom:12px;">loading watchlist…</div>
+
+  <div class="picker-panel" id="tickerPickerPanel">
+    <div class="picker-hint">
+      Not a live trading-volume ranking (no real-time volume feed behind this) — a
+      well-known set of liquid, heavily-traded US stocks/ETFs to pick from. Check the
+      ones you want, add your own below, then scan them right away without waiting for
+      a redeploy.
+    </div>
+    <div class="picker-grid" id="pickerGrid"></div>
+    <div class="picker-custom-row">
+      <input id="pickerCustomInput" type="text" placeholder="Add your own, comma-separated (e.g. DIS, GME)">
+    </div>
+    <div class="picker-actions">
+      <button class="run-btn" id="runCustomScanBtn">Scan Selected</button>
+      <span class="scanner-meta" id="customScanMeta"></span>
+    </div>
+    <div class="picker-selected-line">
+      Selected (<span id="selectedCount">0</span>): <span id="selectedList">none</span>
+      <button class="copy-btn" id="copySelectedBtn">Copy</button>
+      — paste this into the <code>SCANNER_WATCHLIST</code> environment variable on Render
+      to make it your permanent default instead of a one-off scan.
+    </div>
+  </div>
+
   <div id="scannerEmpty" class="scanner-empty" style="display:none;"></div>
   <div id="scannerCards"></div>
   <div class="footer-note">
@@ -1039,9 +1148,36 @@ async function loadWatchlist() {
     const d = await res.json();
     const line = document.getElementById('watchlistLine');
     line.textContent = `Configured to scan (${d.mode} mode): ${d.tickers.join(', ')}`;
+    buildTickerPicker(d.top30 || [], d.tickers || []);
   } catch (e) {
     // stay quiet; not critical
   }
+}
+
+function buildTickerPicker(top30, currentlyConfigured) {
+  const grid = document.getElementById('pickerGrid');
+  const configuredSet = new Set(currentlyConfigured);
+  grid.innerHTML = top30.map(t => `
+    <div class="picker-item">
+      <input type="checkbox" id="pick_${t}" value="${t}" ${configuredSet.has(t) ? 'checked' : ''}>
+      <label for="pick_${t}">${escapeHtml(t)}</label>
+    </div>
+  `).join('');
+  grid.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', updateSelectedLine));
+  updateSelectedLine();
+}
+
+function getSelectedTickers() {
+  const checked = Array.from(document.querySelectorAll('#pickerGrid input:checked')).map(cb => cb.value);
+  const customRaw = document.getElementById('pickerCustomInput').value;
+  const custom = customRaw.split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+  return Array.from(new Set([...checked, ...custom]));
+}
+
+function updateSelectedLine() {
+  const selected = getSelectedTickers();
+  document.getElementById('selectedCount').textContent = selected.length;
+  document.getElementById('selectedList').textContent = selected.length ? selected.join(', ') : 'none';
 }
 
 async function loadScanner() {
@@ -1191,7 +1327,7 @@ document.getElementById('expirationSelect').addEventListener('change', (e) => {
  * sweep never looks hung, and surfaces a failure inline on the button
  * rather than failing silently.
  */
-function wireRunButton(btnId, startUrl, statusUrl, label, onDone) {
+function wireRunButton(btnId, startUrl, statusUrl, label, onDone, getPayload) {
   const btn = document.getElementById(btnId);
   let pollTimer = null;
   let tickTimer = null;
@@ -1234,17 +1370,25 @@ function wireRunButton(btnId, startUrl, statusUrl, label, onDone) {
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
     btn.title = '';
+
+    const payload = getPayload ? getPayload() : null;
+    if (payload === false) return; // getPayload vetoed the click (e.g. nothing selected) -- do nothing, no request
+
     startedAt = Date.now();
     setRunning(true, 'Starting...');
     try {
-      const res = await fetch(startUrl, { method: 'POST' });
+      const opts = payload
+        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+        : { method: 'POST' };
+      const res = await fetch(startUrl, opts);
       if (res.status === 401) { window.location.href = '/login'; return; }
       if (res.status === 409) {
         // already running elsewhere (another tab, or a scheduled script) -- just start polling
       } else if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
         setRunning(false, label);
         btn.classList.add('error');
-        btn.title = `HTTP ${res.status} starting the job`;
+        btn.title = body.error ? `${body.error}` : `HTTP ${res.status} starting the job`;
         return;
       }
       tickTimer = setInterval(tick, 1000);
@@ -1260,6 +1404,34 @@ function wireRunButton(btnId, startUrl, statusUrl, label, onDone) {
 
 wireRunButton('runScanBtn', '/api/scan', '/api/scan/status', 'Scan Now', loadScanner);
 wireRunButton('runBacktestBtn', '/api/backtest/run', '/api/backtest/status', 'Run Backtest', loadBacktest);
+wireRunButton('runCustomScanBtn', '/api/scan', '/api/scan/status', 'Scan Selected', loadScanner, () => {
+  const tickers = getSelectedTickers();
+  if (!tickers.length) {
+    document.getElementById('customScanMeta').textContent = 'Select at least one ticker first.';
+    return false;
+  }
+  document.getElementById('customScanMeta').textContent = '';
+  return { tickers };
+});
+
+document.getElementById('tickerPickerToggle').addEventListener('click', () => {
+  document.getElementById('tickerPickerPanel').classList.toggle('open');
+});
+
+document.getElementById('pickerCustomInput').addEventListener('input', updateSelectedLine);
+
+document.getElementById('copySelectedBtn').addEventListener('click', async () => {
+  const selected = getSelectedTickers();
+  const text = selected.join(',');
+  const btn = document.getElementById('copySelectedBtn');
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = 'Copied!';
+  } catch (e) {
+    btn.textContent = 'Select & Ctrl+C';
+  }
+  setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+});
 
 populatePeriods();
 refreshAll();

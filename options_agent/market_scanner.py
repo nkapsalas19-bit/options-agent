@@ -75,8 +75,11 @@ def _format_alert(c):
     return subject, body
 
 
-def run_once():
-    tickers = get_scan_universe()
+def run_once(tickers=None):
+    """tickers, if given, overrides config-derived universe for just this run
+    (e.g. the dashboard's "Scan These Tickers" picker) without touching
+    config.SCANNER_WATCHLIST or requiring a redeploy."""
+    tickers = tickers if tickers is not None else get_scan_universe()
     start = time.time()
     callouts = scan_universe(tickers)
     elapsed = time.time() - start
