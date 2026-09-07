@@ -35,6 +35,7 @@ from strategies import STRATEGY_FUNCS
 from options_pricing import bs_price, select_strike
 import market_scanner
 import scanner_backtest
+import challenge
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -464,6 +465,78 @@ def start_backtest():
 @login_required
 def backtest_status():
     return jsonify(_backtest_job)
+
+
+# ---- Trading Challenge: goal-oriented paper-trading tracker (see challenge.py) ----
+
+@app.route("/api/challenge", methods=["GET"])
+@login_required
+def get_challenge_route():
+    summary = challenge.get_summary()
+    if summary is None:
+        return jsonify({"active": False})
+    return jsonify({"active": True, **summary})
+
+
+@app.route("/api/challenge", methods=["POST"])
+@login_required
+def set_challenge_route():
+    payload = request.get_json(silent=True) or {}
+    required = ("start_date", "end_date", "starting_budget", "goal_amount", "instrument_pref")
+    missing = [k for k in required if k not in payload]
+    if missing:
+        return jsonify({"error": f"Missing field(s): {', '.join(missing)}"}), 400
+    try:
+        cfg = challenge.set_challenge(
+            start_date=payload["start_date"], end_date=payload["end_date"],
+            starting_budget=payload["starting_budget"], goal_amount=payload["goal_amount"],
+            instrument_pref=payload["instrument_pref"],
+            risk_pct_per_trade=payload.get("risk_pct_per_trade", 3.0),
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"config": cfg})
+
+
+@app.route("/api/challenge", methods=["DELETE"])
+@login_required
+def clear_challenge_route():
+    challenge.clear_challenge()
+    return jsonify({"status": "cleared"})
+
+
+@app.route("/api/challenge/preview", methods=["POST"])
+@login_required
+def challenge_preview():
+    cfg = challenge.get_challenge()
+    if not cfg:
+        return jsonify({"error": "no active challenge"}), 400
+    payload = request.get_json(silent=True) or {}
+    callouts = payload.get("callouts", [])
+    summary = challenge.get_summary()
+    sizings = {}
+    for c in callouts:
+        key = f"{c['ticker']}_{c['timeframe']}"
+        sizings[key] = challenge.suggest_position_size(c, cfg, summary["cash_balance"])
+    return jsonify({"sizings": sizings})
+
+
+@app.route("/api/challenge/trades", methods=["POST"])
+@login_required
+def add_challenge_trade():
+    cfg = challenge.get_challenge()
+    if not cfg:
+        return jsonify({"error": "no active challenge"}), 400
+    payload = request.get_json(silent=True) or {}
+    callout = payload.get("callout")
+    if not callout:
+        return jsonify({"error": "missing callout"}), 400
+    summary = challenge.get_summary()
+    sizing = challenge.suggest_position_size(callout, cfg, summary["cash_balance"])
+    if not sizing:
+        return jsonify({"error": "This trade doesn't fit your current budget/risk settings"}), 400
+    trade = challenge.add_trade(callout["ticker"], callout["timeframe"], sizing)
+    return jsonify({"trade": trade})
 
 
 if __name__ == "__main__":

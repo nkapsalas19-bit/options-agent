@@ -22,6 +22,7 @@ import config
 from universe import get_scan_universe
 from scanner import scan_universe
 from alerts import send_email_alert
+import challenge
 
 RESULTS_PATH = os.path.join(os.path.dirname(__file__), "scanner_results.json")
 ALERTED_PATH = os.path.join(os.path.dirname(__file__), "alerted_callouts.json")
@@ -105,6 +106,13 @@ def run_once(tickers=None):
         alerted.add(key)
 
     _save_json(ALERTED_PATH, sorted(alerted))
+
+    if challenge.get_challenge():
+        try:
+            challenge.check_open_positions()
+        except Exception as e:
+            print(f"[scanner] challenge position check failed: {e}")
+
     return callouts
 
 

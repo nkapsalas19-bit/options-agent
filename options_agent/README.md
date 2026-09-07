@@ -33,9 +33,11 @@ further, not an instruction to execute.
 | `scanner_backtest.py` | Walk-forward backtest of the scanner's technical scoring against real history — the evidence layer, see below |
 | `market_scanner.py` | The scanner's run loop: sweeps the universe, writes `scanner_results.json`, emails high-confidence callouts |
 | `alerts.py` | Gmail SMTP email alerts (prints to console instead if credentials aren't set) |
+| `challenge.py` | Goal-oriented paper-trading tracker — position sizing, ledger, auto-resolution (see "Trading Challenge" below) |
 | `test_pipeline.py` | Validates the SPY/QQQ pipeline with synthetic data (see below for why) |
 | `test_scanner.py` | Validates scanner scoring logic (technical + RS + MTF + news) with synthetic data + stubbed news/earnings |
 | `test_scanner_backtest.py` | Validates the backtest's trade simulation and calibration math against constructed OHLC series |
+| `test_challenge.py` | Validates challenge sizing, ledger math, and auto-resolution (target/stop/time-stop/option re-pricing) |
 
 ## Market Scanner
 
@@ -351,6 +353,76 @@ per day):
 
 Without these set, `alerts.py` prints the alert to the console instead of
 failing, so the scanner keeps running.
+
+## Trading Challenge
+
+A goal-oriented paper-trading tracker layered on top of the scanner
+(`challenge.py`), for questions like "if I have $1,000 and want to reach
+$2,000 in the next 60 days, what would this suggest, and how would it
+actually have gone." Set it up in the dashboard's "Trading Challenge"
+panel:
+
+- **Start date / end date** — your timeframe.
+- **Starting budget** — how much paper capital you're starting with.
+- **Goal amount** — what you're trying to reach by the end date.
+- **Instrument preference** — shares only, options only, or "both" (defers
+  to whatever each callout's own timeframe already suggests as primary).
+- **Risk per trade (%)** — the max percent of your *current* balance any
+  single suggested position is allowed to risk (default 3%, capped between
+  0.5% and 25% to guard against a fat-fingered input, not as trading
+  advice about what's "safe").
+
+### How recommendations get sized
+
+Every scanner callout that matches your instrument preference gets a
+**"Suggested: N shares/contracts... — cost $X, risking $Y"** box with an
+"Add to Challenge" button, computed from your *current* cash balance (not
+your original starting budget — sizing shrinks automatically as the
+balance changes) and the risk-per-trade cap, using the exact same
+ATR-based stop distance already shown in that callout's exit plan. If
+even one unit would risk more than your cap allows, or cost more than you
+have, it's marked as not fitting rather than sized down to something the
+scoring doesn't actually support.
+
+### What happens after you add a trade
+
+It goes into a ledger (`challenge_trades.json`) as an open position, and
+**resolves automatically** — every time you run a scan (via the "Scan Now"
+button or a scheduled `market_scanner.py`), `challenge.check_open_positions()`
+fetches fresh price data for each open position's ticker and checks whether
+it's crossed its target, its stop, or exceeded its planned hold window
+since entry:
+
+- **Shares**: resolves against the underlying price directly.
+- **Options**: resolves against the *underlying's* target/stop (the same
+  levels used for the shares side of that callout), then re-prices the
+  option with Black-Scholes at the actual exit date and underlying price —
+  not the static premium target guessed at recommendation time, which
+  would assume a specific number of days had passed that may not match
+  reality.
+- **Same-window ambiguity resolves to the stop**, not the target — the
+  same conservative convention `scanner_backtest.py` uses, applied
+  consistently rather than picking whichever outcome looks better.
+- A position open longer than its planned hold window closes at the last
+  available price with reason `"time_stop"`, so nothing lingers open
+  forever skewing the numbers.
+
+The panel shows equity, cash, realized P&L, a progress bar (your % of the
+way to the goal vs. % of the timeframe elapsed — a quick "on pace or not"
+read), and full open/closed position tables.
+
+### What this is and isn't
+
+- **It's still paper trading.** No real broker, no real fills, no real
+  bid-ask spread — same approximations as the rest of this repo.
+- **Open positions are marked at cost, not re-priced live**, so "Equity"
+  moves in steps as trades close rather than continuously — a deliberate
+  simplicity trade-off, not an attempt to show a live mark-to-market P&L.
+- **A goal is not a probability.** Setting "$1,000 to $2,000 in 30 days"
+  doesn't mean the system thinks that's likely — it sizes recommendations
+  to fit that budget and risk cap, nothing more. Compare your actual pace
+  against the Backtest Evidence panel's real expectancy per trade (see
+  above) before assuming an aggressive goal is realistic on this edge.
 
 ## Critical limitation: backtest realism
 

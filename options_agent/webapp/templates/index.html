@@ -397,6 +397,110 @@
     margin-left: 8px;
   }
   .copy-btn:hover { color: var(--text); }
+
+  .challenge-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .challenge-form-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .challenge-form-grid input, .challenge-form-grid select {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 7px 10px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+  .progress-wrap { margin: 14px 0; }
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 6px;
+  }
+  .progress-track {
+    position: relative;
+    height: 10px;
+    background: rgba(107,114,128,0.15);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    position: absolute;
+    top: 0; left: 0; height: 100%;
+    border-radius: 5px;
+  }
+  .progress-fill.time { background: rgba(107,114,128,0.5); z-index: 1; }
+  .progress-fill.goal { background: var(--green); z-index: 2; opacity: 0.85; }
+  .challenge-position-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    margin-top: 10px;
+  }
+  .challenge-position-table th {
+    text-align: right;
+    color: var(--text-dim);
+    font-weight: 500;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .challenge-position-table th:first-child, .challenge-position-table td:first-child { text-align: left; }
+  .challenge-position-table td {
+    text-align: right;
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(31,37,48,0.5);
+    color: var(--text);
+  }
+  .challenge-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 14px 0 4px;
+  }
+  .suggested-size-box {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid rgba(0,217,163,0.3);
+    background: rgba(0,217,163,0.06);
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .add-trade-btn {
+    background: var(--green);
+    border: none;
+    color: #0a0d12;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .add-trade-btn:disabled { background: var(--panel-border); color: var(--text-dim); cursor: default; }
   .scanner-empty {
     font-size: 12px;
     color: var(--text-dim);
@@ -730,6 +834,67 @@
     scanner.py -- it is NOT a win-rate or a guarantee. Click "Scan Now" to sweep the
     configured universe on demand; a full sweep can take a while on the free data tier (see
     README) -- the button shows a live timer while it works.
+  </div>
+</div>
+
+<div class="scanner-section">
+  <div class="scanner-header">
+    <div class="panel-title" style="margin:0;">Trading Challenge</div>
+    <span class="scanner-meta" id="challengeHeaderMeta"></span>
+  </div>
+
+  <div id="challengeSetup">
+    <div class="picker-hint">
+      Set a goal, a timeframe, and a starting budget. Scanner callouts that match your
+      instrument preference get sized to fit your actual budget and a per-trade risk cap --
+      add the ones you take, and they resolve automatically (target/stop/time-stop) as new
+      scans come in, the same way scanner_backtest.py resolves historical trades. Still paper
+      trading -- no real broker, no real fills.
+    </div>
+    <div class="challenge-form-grid">
+      <label>Start date<input type="date" id="challengeStartDate"></label>
+      <label>End date<input type="date" id="challengeEndDate"></label>
+      <label>Starting budget ($)<input type="number" id="challengeBudget" min="1" step="1" value="1000"></label>
+      <label>Goal amount ($)<input type="number" id="challengeGoal" min="1" step="1" value="2000"></label>
+      <label>Instrument<select id="challengeInstrument">
+        <option value="shares">Shares only</option>
+        <option value="option">Options only</option>
+        <option value="both" selected>Both (use each callout's own suggestion)</option>
+      </select></label>
+      <label>Risk per trade (%)<input type="number" id="challengeRiskPct" min="0.5" max="25" step="0.5" value="3"></label>
+    </div>
+    <button class="run-btn" id="startChallengeBtn">Start Challenge</button>
+    <span class="scanner-meta" id="challengeSetupError"></span>
+  </div>
+
+  <div id="challengeActive" style="display:none;">
+    <div class="bt-stat-row">
+      <div class="bt-stat-tile"><div class="bt-label">Equity</div><div class="bt-value" id="chEquity">—</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Cash</div><div class="bt-value" id="chCash">—</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Realized P&amp;L</div><div class="bt-value" id="chPnl">—</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Days Left</div><div class="bt-value" id="chDaysLeft">—</div></div>
+      <div class="bt-stat-tile"><div class="bt-label">Status</div><div class="bt-value" id="chStatus">—</div></div>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-label">
+        <span>Progress to goal: <span id="chProgressPct">0</span>%</span>
+        <span>Time elapsed: <span id="chTimePct">0</span>%</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill time" id="chTimeFill"></div>
+        <div class="progress-fill goal" id="chGoalFill"></div>
+      </div>
+    </div>
+    <div id="challengeOpenPositions"></div>
+    <div id="challengeClosedPositions"></div>
+    <button class="picker-toggle-btn" id="resetChallengeBtn" style="margin-top:12px;">Reset Challenge</button>
+  </div>
+
+  <div class="footer-note">
+    Open positions are marked at cost (not re-priced live) until they resolve, so "Equity"
+    moves in steps as trades close, not continuously. Option P&amp;L is Black-Scholes
+    re-priced at the actual exit date/price (see challenge.py) -- an approximation, same
+    caveats as the rest of this repo's option pricing (no real bid/ask, no real skew).
   </div>
 </div>
 
@@ -1140,6 +1305,136 @@ async function loadBacktest() {
   }
 }
 
+let currentChallenge = null; // cached summary from the last /api/challenge fetch, used when adding trades
+
+function fmtMoney(n) {
+  const sign = n < 0 ? '-' : '';
+  return `${sign}$${Math.abs(n).toFixed(2)}`;
+}
+
+function renderPositionsTable(title, positions, isOpen) {
+  if (!positions.length) return '';
+  const rows = positions.map(p => {
+    const pnl = isOpen ? null : (p.proceeds - p.cost);
+    const pnlCell = isOpen
+      ? '<td>—</td>'
+      : `<td style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtMoney(pnl)}</td>`;
+    const detail = p.instrument === 'shares'
+      ? `$${p.entry_price.toFixed(2)} → T $${p.target_price.toFixed(2)} / S $${p.stop_price.toFixed(2)}`
+      : `${p.option_type.toUpperCase()} $${p.strike} exp ${p.expiration_date} @ $${p.entry_price.toFixed(2)}`;
+    return `
+      <tr>
+        <td style="text-align:left;">${escapeHtml(p.ticker)}</td>
+        <td style="text-align:left;">${escapeHtml(p.instrument)}</td>
+        <td>${p.qty}</td>
+        <td style="text-align:left;">${escapeHtml(detail)}</td>
+        <td>${fmtMoney(p.cost)}</td>
+        ${isOpen ? '<td>' + escapeHtml(p.entry_date) + '</td>' : `<td>${escapeHtml(p.exit_reason)} @ ${escapeHtml(p.exit_date)}</td>`}
+        ${pnlCell}
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="challenge-section-title">${escapeHtml(title)} (${positions.length})</div>
+    <table class="challenge-position-table">
+      <thead><tr>
+        <th style="text-align:left;">Ticker</th><th style="text-align:left;">Type</th><th>Qty</th>
+        <th style="text-align:left;">Detail</th><th>Cost</th>
+        <th>${isOpen ? 'Entered' : 'Exit'}</th><th>P&amp;L</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function loadChallenge() {
+  try {
+    const res = await fetch('/api/challenge');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const d = await res.json();
+
+    const setupEl = document.getElementById('challengeSetup');
+    const activeEl = document.getElementById('challengeActive');
+    const headerMeta = document.getElementById('challengeHeaderMeta');
+
+    if (!d.active) {
+      currentChallenge = null;
+      setupEl.style.display = 'block';
+      activeEl.style.display = 'none';
+      headerMeta.textContent = 'no active challenge';
+      return;
+    }
+
+    currentChallenge = d;
+    setupEl.style.display = 'none';
+    activeEl.style.display = 'block';
+    headerMeta.textContent = `${d.config.start_date} → ${d.config.end_date} · goal ${fmtMoney(d.config.goal_amount)}`;
+
+    document.getElementById('chEquity').textContent = fmtMoney(d.equity);
+    document.getElementById('chCash').textContent = fmtMoney(d.cash_balance);
+    const pnlEl = document.getElementById('chPnl');
+    pnlEl.textContent = fmtMoney(d.realized_pnl);
+    pnlEl.style.color = d.realized_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    document.getElementById('chDaysLeft').textContent = d.is_expired ? 'Expired' : d.days_remaining;
+    const statusEl = document.getElementById('chStatus');
+    statusEl.textContent = d.on_pace ? 'On pace' : 'Behind pace';
+    statusEl.style.color = d.on_pace ? 'var(--green)' : 'var(--amber)';
+
+    document.getElementById('chProgressPct').textContent = d.progress_pct;
+    document.getElementById('chTimePct').textContent = d.time_pct;
+    document.getElementById('chGoalFill').style.width = `${Math.max(Math.min(d.progress_pct, 100), 0)}%`;
+    document.getElementById('chTimeFill').style.width = `${Math.max(Math.min(d.time_pct, 100), 0)}%`;
+
+    document.getElementById('challengeOpenPositions').innerHTML = renderPositionsTable('Open Positions', d.open_positions, true);
+    document.getElementById('challengeClosedPositions').innerHTML = renderPositionsTable('Closed Positions', d.closed_positions, false);
+  } catch (e) {
+    // stay quiet; not critical to the rest of the page
+  }
+}
+
+document.getElementById('startChallengeBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('challengeSetupError');
+  errEl.textContent = '';
+  const body = {
+    start_date: document.getElementById('challengeStartDate').value,
+    end_date: document.getElementById('challengeEndDate').value,
+    starting_budget: parseFloat(document.getElementById('challengeBudget').value),
+    goal_amount: parseFloat(document.getElementById('challengeGoal').value),
+    instrument_pref: document.getElementById('challengeInstrument').value,
+    risk_pct_per_trade: parseFloat(document.getElementById('challengeRiskPct').value),
+  };
+  if (!body.start_date || !body.end_date) { errEl.textContent = 'Pick both dates.'; return; }
+  if (!(body.starting_budget > 0)) { errEl.textContent = 'Enter a starting budget.'; return; }
+
+  try {
+    const res = await fetch('/api/challenge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const d = await res.json();
+    if (!res.ok) { errEl.textContent = d.error || 'Could not start the challenge.'; return; }
+    await loadChallenge();
+    loadScanner(); // re-render callouts with sizing suggestions now that a challenge is active
+  } catch (e) {
+    errEl.textContent = 'Could not reach the server.';
+  }
+});
+
+document.getElementById('resetChallengeBtn').addEventListener('click', async () => {
+  if (!confirm('Reset the challenge? This clears your ledger and cannot be undone.')) return;
+  await fetch('/api/challenge', { method: 'DELETE' });
+  await loadChallenge();
+  loadScanner();
+});
+
+// sensible defaults for the setup form: today -> 30 days out
+(function initChallengeDateDefaults() {
+  const start = new Date();
+  const end = new Date();
+  end.setDate(end.getDate() + 30);
+  document.getElementById('challengeStartDate').value = start.toISOString().slice(0, 10);
+  document.getElementById('challengeEndDate').value = end.toISOString().slice(0, 10);
+})();
+
 async function loadWatchlist() {
   try {
     const res = await fetch('/api/watchlist');
@@ -1245,6 +1540,7 @@ async function loadScanner() {
           <ul>${reasonsHtml}</ul>
           ${renderRiskDetail(c)}
           ${renderExitPlan(c)}
+          <div id="challengeSlot${i}"></div>
         </div>
       `;
       container.appendChild(card);
@@ -1264,8 +1560,65 @@ async function loadScanner() {
         loadCalloutChart(d.callouts[idx]);
       });
     });
+
+    if (currentChallenge) {
+      loadChallengeSizing(d.callouts);
+    }
   } catch (e) {
     // stay quiet; the chart panel already surfaces connection errors
+  }
+}
+
+async function loadChallengeSizing(callouts) {
+  try {
+    const res = await fetch('/api/challenge/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callouts }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+
+    callouts.forEach((c, i) => {
+      const slot = document.getElementById(`challengeSlot${i}`);
+      if (!slot) return;
+      const key = `${c.ticker}_${c.timeframe}`;
+      const sizing = d.sizings[key];
+      if (!sizing) {
+        slot.innerHTML = `<div class="picker-hint" style="margin-top:8px;">Doesn't fit your current challenge budget/risk settings or instrument preference.</div>`;
+        return;
+      }
+      const detail = sizing.instrument === 'shares'
+        ? `${sizing.qty} shares @ $${sizing.entry_price.toFixed(2)}`
+        : `${sizing.qty} ${sizing.option_type} contract(s), $${sizing.strike} strike, exp ${sizing.expiration_date} @ $${sizing.entry_price.toFixed(2)}`;
+      slot.innerHTML = `
+        <div class="suggested-size-box">
+          <span><strong>Suggested:</strong> ${escapeHtml(detail)} — cost ${fmtMoney(sizing.cost)}, risking ${fmtMoney(sizing.risk_dollars)}</span>
+          <button class="add-trade-btn" data-idx="${i}">Add to Challenge</button>
+        </div>
+      `;
+      slot.querySelector('.add-trade-btn').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const btn = e.target;
+        btn.disabled = true;
+        btn.textContent = 'Adding...';
+        try {
+          const addRes = await fetch('/api/challenge/trades', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callout: c }),
+          });
+          const addData = await addRes.json();
+          if (!addRes.ok) {
+            btn.textContent = addData.error || 'Failed';
+            return;
+          }
+          btn.textContent = 'Added ✓';
+          await loadChallenge();
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = 'Add to Challenge';
+        }
+      });
+    });
+  } catch (e) {
+    // stay quiet; sizing suggestions are a bonus, not critical
   }
 }
 
@@ -1438,10 +1791,11 @@ refreshAll();
 loadExpirations();
 loadWatchlist();
 loadBacktest();
-loadScanner();
+(async () => { await loadChallenge(); loadScanner(); })(); // challenge state must load before the first scanner render so sizing suggestions show up immediately
 setInterval(refreshAll, 60000); // poll every 60s
 setInterval(loadBacktest, 60000);
 setInterval(loadScanner, 60000);
+setInterval(loadChallenge, 60000);
 </script>
 
 </body>
