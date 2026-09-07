@@ -3,68 +3,90 @@
 Render can't be automated from here — you'll need to click through their
 dashboard yourself with your own account. This is the exact path, in order.
 
-## 1. Push the code to GitHub
+Your code is already pushed to GitHub (`nkapsalas19-bit/options-agent`), so
+you can skip straight to creating the Render service.
 
-From inside the `options_agent` folder:
+## Repo layout — read this before filling in "Root Directory"
 
-```bash
-git init
-git add .
-git commit -m "Initial commit"
+This repository's root is **not** the same folder as the Python package.
+The layout is:
+
+```
+options-agent/              <- repo root (what Render clones)
+  options_agent/            <- the actual Python package, one level in
+    webapp/
+      app.py
+      requirements.txt
+    scanner.py
+    config.py
+    ...
 ```
 
-Create a new repo on GitHub (github.com → New repository), then:
+That extra `options_agent/` layer is easy to miss because the repo is named
+`options-agent` (hyphen) and the folder inside it is `options_agent`
+(underscore) — nearly identical names for two different things. Whatever
+you set **Root Directory** to on Render, it's relative to the repo root
+above, so it must be **`options_agent/webapp`**, not just `webapp`. Getting
+this wrong is exactly what produces a build failure like:
 
-```bash
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-git branch -M main
-git push -u origin main
+```
+ERROR: Could not open requirements file: [Errno 2] No such file or directory: 'requirements.txt'
 ```
 
-## 2. Create the Render Web Service
+(Render looked for `requirements.txt` in the wrong folder because Root
+Directory didn't point at the folder that actually contains it.)
 
-1. Go to [render.com](https://render.com) and log in (or sign up — no credit
-   card needed for the free tier).
+## Create the Render Web Service
+
+1. Go to [render.com](https://render.com) and log in.
 2. Click **New +** → **Web Service**.
-3. Connect your GitHub account if you haven't already, then select the repo
-   you just pushed.
-4. Fill in the configuration:
+3. Select the `nkapsalas19-bit/options-agent` repo.
+4. Find the **Branch** field/dropdown and select
+   `claude/ai-stock-trading-bot-2gj4lp` — that's the branch with all the
+   scanner/dashboard work on it, not `main`.
+5. Fill in the configuration:
 
 | Field | Value |
 |---|---|
-| **Root Directory** | `webapp` (since `app.py` lives inside `options_agent/webapp/`) |
+| **Root Directory** | `options_agent/webapp` |
 | **Runtime** | Python 3 |
 | **Build Command** | `pip install -r requirements.txt` |
 | **Start Command** | `gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120` |
 | **Instance Type** | Free |
 
-5. Under **Environment Variables**, add:
+6. Under **Environment Variables**, add:
 
 | Key | Value |
 |---|---|
 | `DASHBOARD_PASSWORD` | pick your own password |
-| `FLASK_SECRET_KEY` | any long random string (e.g. generate one with `python -c "import secrets; print(secrets.token_hex(32))"`) |
+| `FLASK_SECRET_KEY` | any long random string (mashing your keyboard for 30-40 characters works fine) |
 
-6. Click **Create Web Service**. First build takes 2-3 minutes — you can
-   watch it in the Logs tab.
-7. Once it's live, Render gives you a URL like
+7. Click **Create Web Service** (or, if you already created the service with
+   the wrong Root Directory, open it → **Settings** → fix **Root Directory**
+   → save → **Manual Deploy** → **Deploy latest commit**, since a Root
+   Directory change doesn't always trigger a rebuild by itself).
+8. First build takes 2-3 minutes — watch it in the **Logs** tab. It should
+   now get past the `pip install` step instead of failing immediately.
+9. Once it's live, Render gives you a URL like
    `https://your-app-name.onrender.com`. That's your public dashboard,
-   password-gated.
+   password-gated with whatever you set in step 6.
 
 ## Things worth knowing about the free tier
 
 - **Cold starts**: Render's free tier spins the service down after 15
   minutes of no traffic. The next visit takes 30-60 seconds to wake back up.
   Fine for personal use, just don't be surprised by the delay.
-- **Every `git push` auto-redeploys.** Change something locally, commit,
-  push — Render rebuilds automatically.
-- If the build fails, check the **Logs** tab first — almost always a missing
-  package in `webapp/requirements.txt` or a typo in the start command.
+- **Every `git push` to this branch auto-redeploys.** Render watches the
+  branch you selected in step 4.
+- If the build fails, check the **Logs** tab first — the two most common
+  causes are Root Directory pointing at the wrong folder (see above) and a
+  missing package in `options_agent/webapp/requirements.txt`.
 
-## Why "Root Directory: webapp" matters
+## Why "Root Directory: options_agent/webapp" matters
 
 `app.py` adds its parent directory to `sys.path` at runtime so it can import
-the sibling modules (`data_fetcher.py`, `strategies.py`, etc.) that live in
-`options_agent/`, not `options_agent/webapp/`. That works regardless of
-Render's working directory, so you don't need to change any code — just
-point Render's Root Directory at `webapp` and it'll find everything.
+the sibling modules (`data_fetcher.py`, `strategies.py`, `scanner.py`, etc.)
+that live in `options_agent/`, one level up from `webapp/`. That works
+regardless of Render's working directory, so you don't need to change any
+code — just point Root Directory at the actual `webapp` folder inside
+`options_agent/` and it'll find everything from there.
