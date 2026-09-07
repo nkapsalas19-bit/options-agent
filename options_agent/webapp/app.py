@@ -18,6 +18,7 @@ through Flask.
 import sys
 import os
 import json
+import threading
 from functools import wraps
 from datetime import datetime, timedelta
 
@@ -31,6 +32,8 @@ import config
 from data_fetcher import fetch_daily, fetch_intraday, get_expirations, get_option_chain
 from strategies import STRATEGY_FUNCS
 from options_pricing import bs_price, select_strike
+import market_scanner
+import scanner_backtest
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -316,8 +319,8 @@ SCANNER_RESULTS_PATH = os.path.join(
 @app.route("/api/scanner")
 @login_required
 def scanner_results():
-    """Reads the latest output of market_scanner.py, run separately (python
-    market_scanner.py) since a full universe sweep is too slow for a web request."""
+    """Reads the latest scan output -- either from the "Scan Now" button
+    (see /api/scan below) or from python market_scanner.py run separately."""
     if not os.path.exists(SCANNER_RESULTS_PATH):
         return jsonify({
             "generated_at": None, "universe_size": 0, "cycle_seconds": None, "callouts": [],
@@ -335,17 +338,97 @@ BACKTEST_RESULTS_PATH = os.path.join(
 @app.route("/api/backtest")
 @login_required
 def backtest_results():
-    """Reads the latest output of scanner_backtest.py, run separately (python
-    scanner_backtest.py) -- a multi-year, multi-ticker walk-forward backtest is
-    far too slow to run inside a web request."""
+    """Reads the latest backtest output -- either from the "Run Backtest"
+    button (see /api/backtest/run below) or from python scanner_backtest.py
+    run separately."""
     if not os.path.exists(BACKTEST_RESULTS_PATH):
         return jsonify({
             "generated_at": None, "report": {},
-            "note": "Backtest hasn't run yet. Start it separately with: python scanner_backtest.py",
+            "note": "Backtest hasn't run yet. Click \"Run Backtest\" above, or start it separately with: python scanner_backtest.py",
         })
     with open(BACKTEST_RESULTS_PATH) as f:
         return jsonify(json.load(f))
 
 
+# ---- Background-triggered scan / backtest, so nothing requires a terminal ----
+# A full universe sweep or multi-year backtest is too slow for a single request
+# (could be minutes), so each button starts a background thread and the page
+# polls the matching /status endpoint until it finishes, then re-fetches the
+# results route above. Only one of each job runs at a time; a second click
+# while one is running is reported as still-running rather than queued or
+# stacked, so repeated clicks can't launch overlapping sweeps.
+_scan_lock = threading.Lock()
+_scan_job = {"running": False, "started_at": None, "finished_at": None, "error": None}
+
+_backtest_lock = threading.Lock()
+_backtest_job = {"running": False, "started_at": None, "finished_at": None, "error": None}
+
+
+def _run_scan_job():
+    try:
+        market_scanner.run_once()
+        _scan_job["error"] = None
+    except Exception as e:
+        _scan_job["error"] = str(e)
+    finally:
+        _scan_job["running"] = False
+        _scan_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+@app.route("/api/scan", methods=["POST"])
+@login_required
+def start_scan():
+    if not _scan_lock.acquire(blocking=False):
+        return jsonify({"status": "already_running", "job": _scan_job}), 409
+    try:
+        if _scan_job["running"]:
+            return jsonify({"status": "already_running", "job": _scan_job}), 409
+        _scan_job.update(running=True, started_at=datetime.now().isoformat(timespec="seconds"),
+                          finished_at=None, error=None)
+        threading.Thread(target=_run_scan_job, daemon=True).start()
+        return jsonify({"status": "started", "job": _scan_job})
+    finally:
+        _scan_lock.release()
+
+
+@app.route("/api/scan/status")
+@login_required
+def scan_status():
+    return jsonify(_scan_job)
+
+
+def _run_backtest_job():
+    try:
+        scanner_backtest.run_and_save()
+        _backtest_job["error"] = None
+    except Exception as e:
+        _backtest_job["error"] = str(e)
+    finally:
+        _backtest_job["running"] = False
+        _backtest_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+@app.route("/api/backtest/run", methods=["POST"])
+@login_required
+def start_backtest():
+    if not _backtest_lock.acquire(blocking=False):
+        return jsonify({"status": "already_running", "job": _backtest_job}), 409
+    try:
+        if _backtest_job["running"]:
+            return jsonify({"status": "already_running", "job": _backtest_job}), 409
+        _backtest_job.update(running=True, started_at=datetime.now().isoformat(timespec="seconds"),
+                              finished_at=None, error=None)
+        threading.Thread(target=_run_backtest_job, daemon=True).start()
+        return jsonify({"status": "started", "job": _backtest_job})
+    finally:
+        _backtest_lock.release()
+
+
+@app.route("/api/backtest/status")
+@login_required
+def backtest_status():
+    return jsonify(_backtest_job)
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, host="0.0.0.0")
+    app.run(debug=True, port=5000, host="0.0.0.0", threaded=True)

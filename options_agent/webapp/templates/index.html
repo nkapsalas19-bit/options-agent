@@ -289,6 +289,30 @@
     color: var(--text-dim);
     font-family: 'JetBrains Mono', monospace;
   }
+  .run-btn {
+    background: transparent;
+    border: 1px solid var(--green);
+    color: var(--green);
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .run-btn:hover:not(:disabled) {
+    background: rgba(0,217,163,0.1);
+  }
+  .run-btn:disabled {
+    color: var(--text-dim);
+    border-color: var(--panel-border);
+    cursor: default;
+  }
+  .run-btn.error {
+    border-color: var(--red);
+    color: var(--red);
+  }
   .scanner-empty {
     font-size: 12px;
     color: var(--text-dim);
@@ -521,6 +545,7 @@
 <div class="scanner-section">
   <div class="scanner-header">
     <div class="panel-title" style="margin:0;">Backtest Evidence — Does The Score Actually Predict Anything?</div>
+    <button class="run-btn" id="runBacktestBtn">Run Backtest</button>
     <span class="scanner-meta" id="backtestMeta">not run yet</span>
   </div>
   <div id="backtestEmpty" class="scanner-empty" style="display:none;"></div>
@@ -530,24 +555,26 @@
     agreement, RSI, volume, trend filter, multi-timeframe confluence, relative strength) --
     news sentiment and earnings-date risk are live-only and can't be backtested with free
     data (see scanner_backtest.py). It does not include real bid/ask spreads, slippage, or
-    actual historical option prices. Run <code>python scanner_backtest.py</code> separately
-    to generate/refresh this. Past performance on historical data is not a guarantee of
-    future results.
+    actual historical option prices. Past performance on historical data is not a guarantee
+    of future results. Runs against the S&P 500 (or your configured watchlist) and can take
+    several minutes -- the button stays disabled with a live timer while it works.
   </div>
 </div>
 
 <div class="scanner-section">
   <div class="scanner-header">
     <div class="panel-title" style="margin:0;">Market Scanner — News + Technicals Callouts</div>
+    <button class="run-btn" id="runScanBtn">Scan Now</button>
     <span class="scanner-meta" id="scannerMeta">not run yet</span>
   </div>
   <div id="scannerEmpty" class="scanner-empty" style="display:none;"></div>
   <div id="scannerCards"></div>
   <div class="footer-note">
-    Confidence is a transparent 0-100 rule score (technical agreement + news sentiment
-    alignment) computed by scanner.py -- it is NOT a win-rate or a guarantee. Run
-    <code>python market_scanner.py</code> separately to populate this table; it polls
-    on <code>config.SCAN_INTERVAL_SECONDS</code>, not truly every second (see README).
+    Confidence is a transparent 0-100 rule score (technical agreement + relative strength +
+    multi-timeframe confluence + news sentiment + earnings/sector checks) computed by
+    scanner.py -- it is NOT a win-rate or a guarantee. Click "Scan Now" to sweep the
+    configured universe on demand; a full sweep can take a while on the free data tier (see
+    README) -- the button shows a live timer while it works.
   </div>
 </div>
 
@@ -740,13 +767,31 @@ function renderExitPlan(c) {
     </div>`;
 
   if (option) {
+    const alt = c.option_alt;
+    const isPrimary = c.instrument_primary === 'option';
+    const typeColor = alt.type === 'call' ? 'var(--green)' : 'var(--red)';
+    const thesis = option.price_thesis;
+
+    let thesisRows = '';
+    if (thesis) {
+      thesisRows = `
+        <div class="exit-basis" style="margin-top:8px; padding-top:6px; border-top:1px solid var(--panel-border);">
+          <strong>If the price thesis plays out</strong> (~${thesis.horizon_days}d):
+        </div>
+        <div class="exit-row"><span style="color:var(--green)">Underlying hits $${thesis.underlying_target.toFixed(2)} → option ~</span><span>$${thesis.est_option_value_at_target.toFixed(2)}</span></div>
+        <div class="exit-row"><span style="color:var(--red)">Underlying hits $${thesis.underlying_stop.toFixed(2)} → option ~</span><span>$${thesis.est_option_value_at_stop.toFixed(2)}</span></div>
+        <div class="exit-basis">${escapeHtml(thesis.basis)}</div>
+      `;
+    }
+
     boxes += `
     <div class="exit-box">
-      <div class="exit-title">Option Alt — ${escapeHtml(c.option_alt.type)} $${c.option_alt.strike} (${c.option_alt.dte_days}d)</div>
+      <div class="exit-title">${isPrimary ? '' : 'Option Alt — '}<span style="color:${typeColor}; font-weight:700;">${escapeHtml(alt.type.toUpperCase())}</span> $${alt.strike} · exp ${escapeHtml(alt.expiration_date)} (${alt.dte_days}d)</div>
       <div class="exit-row"><span>Entry (est.)</span><span>$${option.entry_price.toFixed(2)}</span></div>
-      <div class="exit-row"><span style="color:var(--green)">Target</span><span>$${option.profit_target.toFixed(2)}</span></div>
-      <div class="exit-row"><span style="color:var(--red)">Stop</span><span>$${option.stop_loss.toFixed(2)}</span></div>
+      <div class="exit-row"><span style="color:var(--green)">Target (premium rule)</span><span>$${option.profit_target.toFixed(2)}</span></div>
+      <div class="exit-row"><span style="color:var(--red)">Stop (premium rule)</span><span>$${option.stop_loss.toFixed(2)}</span></div>
       <div class="exit-basis">${escapeHtml(option.basis)}</div>
+      ${thesisRows}
     </div>`;
   }
 
@@ -868,13 +913,16 @@ async function loadScanner() {
       card.className = 'callout-card';
       const dirClass = c.direction === 'BULLISH' ? 'bullish' : 'bearish';
       const reasonsHtml = (c.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join('');
+      const actionLabel = c.instrument_primary === 'option'
+        ? `${c.suggested_action} $${c.option_alt.strike} exp ${c.option_alt.expiration_date}`
+        : c.suggested_action;
 
       card.innerHTML = `
         <div class="callout-summary" data-idx="${i}">
           <span class="callout-ticker">${escapeHtml(c.ticker)}</span>
           <span class="callout-tf">${escapeHtml(c.timeframe)}</span>
           <span class="callout-direction ${dirClass}">${escapeHtml(c.direction)}</span>
-          <span class="callout-action">${escapeHtml(c.suggested_action)}</span>
+          <span class="callout-action">${escapeHtml(actionLabel)}</span>
           <span class="callout-spot">$${c.spot.toFixed(2)}</span>
           <div class="conf-bar-wrap">
             <span>${c.confidence_score.toFixed(0)}</span>
@@ -932,6 +980,83 @@ document.getElementById('expirationSelect').addEventListener('change', (e) => {
   state.expiration = e.target.value;
   loadChain();
 });
+
+/**
+ * Wires a "Scan Now" / "Run Backtest" style button end to end:
+ * click -> POST startUrl -> poll statusUrl until not running -> onDone().
+ * Shows a live elapsed-time timer on the button itself so a multi-minute
+ * sweep never looks hung, and surfaces a failure inline on the button
+ * rather than failing silently.
+ */
+function wireRunButton(btnId, startUrl, statusUrl, label, onDone) {
+  const btn = document.getElementById(btnId);
+  let pollTimer = null;
+  let tickTimer = null;
+  let startedAt = null;
+
+  function setRunning(running, text) {
+    btn.disabled = running;
+    btn.classList.remove('error');
+    btn.textContent = text;
+  }
+
+  function tick() {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    btn.textContent = `Running... ${secs}s`;
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch(statusUrl);
+      const job = await res.json();
+      if (job.running) return;
+
+      clearInterval(pollTimer);
+      clearInterval(tickTimer);
+      if (job.error) {
+        btn.disabled = false;
+        btn.classList.add('error');
+        btn.textContent = `Failed — ${label}`;
+        btn.title = job.error;
+      } else {
+        setRunning(false, label);
+        btn.title = '';
+        onDone();
+      }
+    } catch (e) {
+      // network hiccup polling status -- keep trying, don't abandon the run
+    }
+  }
+
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.title = '';
+    startedAt = Date.now();
+    setRunning(true, 'Starting...');
+    try {
+      const res = await fetch(startUrl, { method: 'POST' });
+      if (res.status === 401) { window.location.href = '/login'; return; }
+      if (res.status === 409) {
+        // already running elsewhere (another tab, or a scheduled script) -- just start polling
+      } else if (!res.ok) {
+        setRunning(false, label);
+        btn.classList.add('error');
+        btn.title = `HTTP ${res.status} starting the job`;
+        return;
+      }
+      tickTimer = setInterval(tick, 1000);
+      pollTimer = setInterval(poll, 2000);
+      poll();
+    } catch (e) {
+      setRunning(false, label);
+      btn.classList.add('error');
+      btn.title = 'Could not reach the server to start the job.';
+    }
+  });
+}
+
+wireRunButton('runScanBtn', '/api/scan', '/api/scan/status', 'Scan Now', loadScanner);
+wireRunButton('runBacktestBtn', '/api/backtest/run', '/api/backtest/status', 'Run Backtest', loadBacktest);
 
 populatePeriods();
 refreshAll();

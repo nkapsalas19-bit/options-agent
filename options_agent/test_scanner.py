@@ -130,6 +130,11 @@ def main():
     assert plan["shares"]["reward_risk_ratio"] is not None and plan["shares"]["reward_risk_ratio"] > 0
     assert "time_stop" in plan and "invalidation_rule" in plan
     assert "option" in plan and plan["option"]["profit_target"] > plan["option"]["entry_price"] > plan["option"]["stop_loss"]
+    assert "expiration_date" in result["option_alt"], "option_alt must state a calendar expiration date, not just DTE"
+    thesis = plan["option"]["price_thesis"]
+    assert thesis["underlying_target"] == plan["shares"]["profit_target"]
+    assert thesis["underlying_stop"] == plan["shares"]["stop_loss"]
+    assert thesis["est_option_value_at_target"] > 0 and thesis["est_option_value_at_stop"] > 0
 
     print("\n=== 7. Conflicting news should reduce confidence vs aligned news ===")
     scanner.get_news_sentiment = lambda ticker, lookback: (-0.4, ["Company faces headwinds"])

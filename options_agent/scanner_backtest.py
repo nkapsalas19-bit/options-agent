@@ -224,6 +224,22 @@ def run_full_backtest(tickers, timeframe_names=None):
     return report, all_trades
 
 
+def run_and_save(tickers=None, timeframe_names=None):
+    """Runs the full backtest and writes RESULTS_PATH -- the one function the
+    dashboard's "Run Backtest" button (webapp/app.py) calls in a background
+    thread, so a person never has to open a terminal to generate this."""
+    from universe import get_scan_universe
+
+    tickers = tickers if tickers is not None else get_scan_universe()
+    timeframe_names = timeframe_names or ["swing"]
+    report, trades = run_full_backtest(tickers, timeframe_names=timeframe_names)
+
+    with open(RESULTS_PATH, "w") as f:
+        json.dump({"report": report, "generated_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+                    "universe_size": len(tickers)}, f, indent=2, default=str)
+    return report, trades
+
+
 if __name__ == "__main__":
     from universe import get_scan_universe
 
@@ -232,9 +248,6 @@ if __name__ == "__main__":
           f"(swing timeframe only by default -- intraday history is capped at ~60 days by yfinance's "
           f"free tier, too short a window to trust the resulting stats)...")
 
-    report, trades = run_full_backtest(tickers, timeframe_names=["swing"])
-
+    report, trades = run_and_save(tickers, timeframe_names=["swing"])
     print(json.dumps(report, indent=2, default=str))
-    with open(RESULTS_PATH, "w") as f:
-        json.dump({"report": report, "generated_at": pd.Timestamp.now().isoformat(timespec="seconds")}, f, indent=2, default=str)
     print(f"\nWrote {RESULTS_PATH}")

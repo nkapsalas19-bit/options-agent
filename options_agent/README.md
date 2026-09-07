@@ -97,10 +97,18 @@ Every callout ships an `exit_plan`, not just an entry idea:
   recent volatility instead of one flat percentage applied to every name
   (a fixed 2% stop means something very different on a low-vol utility than
   a high-vol momentum name). Reward:risk ratio is reported alongside.
-- **Option alt**: stop/target as a percent of the option premium
-  (`config.PROFIT_TARGET_PCT` / `config.STOP_LOSS_PCT`), since theta decay
-  makes an underlying-price-based stop unreliable for a short-dated
-  contract's actual P&L.
+- **Option alt**: states the exact contract — call or put, strike,
+  **expiration date** (not just a day count) — plus two things:
+  1. A percent-of-premium stop/target (`config.PROFIT_TARGET_PCT` /
+     `config.STOP_LOSS_PCT`), since theta decay makes an underlying-price-based
+     stop unreliable for a short-dated contract's actual P&L.
+  2. A **price thesis**: what the contract would actually be worth (re-priced
+     with Black-Scholes) if the underlying reaches the *same* ATR target/stop
+     used for the shares plan, a few days out. This ties the option's
+     projected payoff to the same "what do we think the stock does" thesis
+     instead of leaving it as an unrelated flat-percent rule — and it's
+     usually a smaller number than you'd expect, because it also has to
+     survive theta decay over that window, not just the price move.
 - **Time-stop**: an explicit "close/re-evaluate by X" rule
   (`config.SWING_MAX_HOLD_DAYS` for shares, `config.INTRADAY_MAX_HOLD_BARS`
   for the option), because a setup that goes nowhere for that long has
@@ -151,13 +159,14 @@ position per name.
   still fail on the next 2-3 years; markets change regimes.
 
 Run it and read the calibration table before trusting any score this thing
-shows you:
+shows you — click **"Run Backtest"** in the dashboard's "Backtest Evidence"
+panel (see "One-click dashboard" below), or from a terminal:
 
 ```bash
 python scanner_backtest.py
 ```
 
-This writes `scanner_backtest_results.json`, which the dashboard's
+Either way it writes `scanner_backtest_results.json`, which the dashboard's
 "Backtest Evidence" panel (`/api/backtest`) displays alongside the live
 scanner output.
 
@@ -174,16 +183,39 @@ scanner output.
   prints each cycle's actual duration — set `config.SCAN_INTERVAL_SECONDS` to
   at least that, or scan fewer tickers via `SCANNER_UNIVERSE_MODE = "watchlist"`.
 
-### Running the scanner
+### One-click dashboard — no terminal required after setup
+
+Once the dashboard is running (`python webapp/app.py`, visit
+`http://localhost:5000`), everything else is a button click:
+
+- **"Scan Now"** (Market Scanner panel) triggers a full sweep of the
+  configured universe in the background and refreshes the callout list when
+  it's done. The button shows a live timer and stays disabled while it
+  works — a full S&P 500 sweep is a genuinely slow operation on free data
+  (see "Honest limits" above), not an instant action, so the button is
+  built to make that wait visible rather than pretend it's instant.
+- **"Run Backtest"** (Backtest Evidence panel) triggers
+  `scanner_backtest.py` the same way — background job, live timer,
+  auto-refresh on completion.
+- Clicking either button while its job is still running just keeps polling
+  the same job instead of starting a second overlapping one.
+- If a job fails (e.g. no network), the button turns red and shows the
+  error on hover instead of failing silently.
+
+You still never *need* a terminal for either of these day-to-day, but the
+underlying scripts still run standalone too, useful for scheduling (cron,
+Task Scheduler) or running headless without the dashboard open:
 
 ```bash
 pip install -r requirements.txt
 python market_scanner.py          # single sweep by default (see main_loop() to poll continuously)
+python scanner_backtest.py
 ```
 
-This writes `scanner_results.json`, which the dashboard's new "Market
-Scanner" panel (`webapp/app.py`'s `/api/scanner` route) reads and displays —
-run the scanner and the dashboard as two separate processes.
+Both write to the same JSON files the dashboard's buttons produce
+(`scanner_results.json`, `scanner_backtest_results.json`), so a scheduled
+script and the on-demand buttons interchange freely — whichever ran most
+recently is what the dashboard shows.
 
 ### Email alerts
 

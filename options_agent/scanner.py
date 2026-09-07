@@ -47,7 +47,7 @@ Accuracy levers, in order of how much they matter:
      flagged (IV crush risk), not silently ignored.
 Callouts below config.MIN_CONFIDENCE_SCORE are discarded entirely.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 
@@ -314,13 +314,29 @@ def _sector_confirmation(ticker, direction):
     return 0, []
 
 
-def _build_exit_plan(direction, instrument, spot, df, tf_cfg, entry_option_price=None, option_type=None, dte=None):
+def _hold_days_for_projection(instrument):
+    """Converts each timeframe's time-stop into a day count, for re-pricing
+    the option at a future date under the Black-Scholes assumption."""
+    if instrument == "shares":
+        return config.SWING_MAX_HOLD_DAYS
+    return (config.INTRADAY_MAX_HOLD_BARS * 15) / (6.5 * 60)  # bars -> minutes -> fraction of a 6.5h trading day
+
+
+def _build_exit_plan(direction, instrument, spot, df, tf_cfg, entry_option_price=None, option_type=None,
+                      dte=None, strike=None, iv=None):
     """Produces concrete, numeric exit rules -- not just a score. Shares use
     ATR-scaled stop/target so the levels reflect this ticker's actual recent
     volatility; options use the config's percent-of-premium rule (theta decay
     makes a wide underlying-based stop meaningless on a short-dated contract).
     Every plan also has a time-stop and a condition-based invalidation rule,
-    since "the setup stopped being true" can happen before either price level hits."""
+    since "the setup stopped being true" can happen before either price level hits.
+
+    For the option leg specifically, ALSO computes what the contract would
+    actually be worth if the underlying's own price thesis (the ATR
+    target/stop) plays out -- re-priced with Black-Scholes at a future date,
+    same IV assumption. This directly answers "what is this betting the
+    stock will do" instead of leaving the option's stop/target as an
+    unrelated flat-percent rule."""
     atr_series = atr_indicator(df, config.ATR_PERIOD)
     atr_val = atr_series.iloc[-1] if len(atr_series) else np.nan
     if np.isnan(atr_val) or atr_val <= 0:
@@ -369,6 +385,22 @@ def _build_exit_plan(direction, instrument, spot, df, tf_cfg, entry_option_price
                      f"premium (not the underlying) -- theta decay on a {dte}-day contract makes an "
                      f"underlying-price-based stop unreliable for the option's actual P&L",
         }
+
+        if strike is not None and iv is not None:
+            hold_days = _hold_days_for_projection(instrument)
+            dte_at_projection = max(dte - hold_days, 0.5)
+            proj_at_target = bs_price(shares_target, strike, dte_at_projection, iv, config.RISK_FREE_RATE, option_type)
+            proj_at_stop = bs_price(shares_stop, strike, dte_at_projection, iv, config.RISK_FREE_RATE, option_type)
+            plan["option"]["price_thesis"] = {
+                "underlying_target": round(shares_target, 2),
+                "est_option_value_at_target": round(proj_at_target, 2),
+                "underlying_stop": round(shares_stop, 2),
+                "est_option_value_at_stop": round(proj_at_stop, 2),
+                "horizon_days": round(hold_days, 1),
+                "basis": f"Black-Scholes re-priced at the underlying's own ATR target/stop, "
+                         f"~{hold_days:.0f} days out, same {iv*100:.0f}% IV assumption -- this is what the "
+                         f"option is actually betting on, not just a flat premium percentage",
+            }
 
     return plan
 
@@ -426,8 +458,9 @@ def scan_ticker(ticker, timeframe_name, daily_df=None, benchmark_df=None):
 
     exit_plan = _build_exit_plan(
         direction, tf_cfg["instrument"], spot, df, tf_cfg,
-        entry_option_price=est_option_price, option_type=option_type, dte=dte,
+        entry_option_price=est_option_price, option_type=option_type, dte=dte, strike=strike, iv=iv,
     )
+    expiration_date = (datetime.now() + timedelta(days=dte)).strftime("%Y-%m-%d")
 
     return {
         "ticker": ticker,
@@ -437,6 +470,7 @@ def scan_ticker(ticker, timeframe_name, daily_df=None, benchmark_df=None):
         "instrument_primary": tf_cfg["instrument"],
         "option_alt": {
             "type": option_type, "strike": strike, "dte_days": dte,
+            "expiration_date": expiration_date,
             "est_price": round(est_option_price, 2), "iv_assumed": iv,
         },
         "confidence_score": round(confidence, 1),
