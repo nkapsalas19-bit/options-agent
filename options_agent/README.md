@@ -229,6 +229,22 @@ scanner output.
   `"sp500"` once you've confirmed watchlist mode is reliable in your actual
   hosting environment.
 
+### Changing which tickers get scanned (no code editing required)
+
+Set an environment variable named `SCANNER_WATCHLIST` to a comma-separated
+list, e.g. `SPY,QQQ,AAPL,TSLA,COIN` — on Render, that's Settings →
+Environment → add a variable, no different from setting
+`DASHBOARD_PASSWORD`. Restart/redeploy the service to pick it up. Leave it
+unset to keep the default 10-ticker list in `config.py`.
+
+The dashboard also shows exactly what's configured, right in the "Market
+Scanner" panel — a line reading "Configured to scan (watchlist mode): ..."
+before you've run a scan, and "Last scanned: ..." with the actual list
+after one completes. And the main chart at the top isn't limited to
+SPY/QQQ — there's a text box next to those buttons where you can type any
+ticker (e.g. `AAPL`) to load its chart directly, independent of the
+scanner.
+
 ### One-click dashboard — no terminal required after setup
 
 Once the dashboard is running (`python webapp/app.py`, visit

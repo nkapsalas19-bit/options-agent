@@ -316,6 +316,16 @@ SCANNER_RESULTS_PATH = os.path.join(
 )
 
 
+@app.route("/api/watchlist")
+@login_required
+def watchlist():
+    """What the scanner is CURRENTLY configured to scan, independent of
+    whether it's run yet -- lets the dashboard show this before the first
+    "Scan Now" click, not just after."""
+    from universe import get_scan_universe
+    return jsonify({"mode": config.SCANNER_UNIVERSE_MODE, "tickers": get_scan_universe()})
+
+
 @app.route("/api/scanner")
 @login_required
 def scanner_results():
@@ -323,7 +333,7 @@ def scanner_results():
     (see /api/scan below) or from python market_scanner.py run separately."""
     if not os.path.exists(SCANNER_RESULTS_PATH):
         return jsonify({
-            "generated_at": None, "universe_size": 0, "cycle_seconds": None, "callouts": [],
+            "generated_at": None, "universe_size": 0, "tickers_scanned": [], "cycle_seconds": None, "callouts": [],
             "note": "Scanner hasn't run yet. Start it separately with: python market_scanner.py",
         })
     with open(SCANNER_RESULTS_PATH) as f:

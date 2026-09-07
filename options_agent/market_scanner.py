@@ -85,6 +85,7 @@ def run_once():
     _save_json(RESULTS_PATH, {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "universe_size": len(tickers),
+        "tickers_scanned": tickers,
         "cycle_seconds": round(elapsed, 1),
         "callouts": callouts,
     })

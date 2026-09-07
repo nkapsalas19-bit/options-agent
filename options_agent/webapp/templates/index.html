@@ -502,6 +502,11 @@
     </div>
   </div>
   <div class="controls">
+    <form id="tickerSearchForm" style="display:flex; gap:4px;">
+      <input id="tickerSearchInput" type="text" placeholder="Any ticker (e.g. AAPL)" autocomplete="off"
+             style="background:transparent; border:1px solid var(--panel-border); color:var(--text); padding:6px 10px; font-size:12px; font-family:'JetBrains Mono',monospace; border-radius:4px; width:150px;">
+      <button type="submit" class="seg-btn">Go</button>
+    </form>
     <button class="seg-btn active" data-ticker="SPY">SPY</button>
     <button class="seg-btn" data-ticker="QQQ">QQQ</button>
     <select id="strategySelect">
@@ -607,6 +612,7 @@
     <button class="run-btn" id="runScanBtn">Scan Now</button>
     <span class="scanner-meta" id="scannerMeta">not run yet</span>
   </div>
+  <div class="scanner-meta" id="watchlistLine" style="margin-bottom:12px;">loading watchlist…</div>
   <div id="scannerEmpty" class="scanner-empty" style="display:none;"></div>
   <div id="scannerCards"></div>
   <div class="footer-note">
@@ -689,13 +695,14 @@ async function loadCalloutChart(c) {
   document.getElementById('strategySelect').value = state.strategy;
 
   state.ticker = c.ticker;
+  document.getElementById('tickerSearchInput').value = c.ticker;
   state.interval = c.timeframe === 'intraday' ? '15m' : '1d';
   document.getElementById('intervalSelect').value = state.interval;
   populatePeriods();
   state.period = c.timeframe === 'intraday' ? '5d' : '6mo';
   document.getElementById('periodSelect').value = state.period;
 
-  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.seg-btn[data-ticker]').forEach(b => b.classList.remove('active'));
   const matchingBtn = document.querySelector(`.seg-btn[data-ticker="${c.ticker}"]`);
   if (matchingBtn) matchingBtn.classList.add('active');
 
@@ -1024,6 +1031,19 @@ async function loadBacktest() {
   }
 }
 
+async function loadWatchlist() {
+  try {
+    const res = await fetch('/api/watchlist');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) return;
+    const d = await res.json();
+    const line = document.getElementById('watchlistLine');
+    line.textContent = `Configured to scan (${d.mode} mode): ${d.tickers.join(', ')}`;
+  } catch (e) {
+    // stay quiet; not critical
+  }
+}
+
 async function loadScanner() {
   try {
     const res = await fetch('/api/scanner');
@@ -1034,6 +1054,9 @@ async function loadScanner() {
     const meta = document.getElementById('scannerMeta');
     if (d.generated_at) {
       meta.textContent = `${d.callouts.length} callouts · ${d.universe_size} tickers scanned · ${d.cycle_seconds}s cycle · updated ${d.generated_at}`;
+      if (d.tickers_scanned && d.tickers_scanned.length) {
+        document.getElementById('watchlistLine').textContent = `Last scanned: ${d.tickers_scanned.join(', ')}`;
+      }
     } else {
       meta.textContent = d.note || 'not run yet';
     }
@@ -1110,15 +1133,31 @@ async function loadScanner() {
   }
 }
 
-document.querySelectorAll('.seg-btn').forEach(btn => {
+document.querySelectorAll('.seg-btn[data-ticker]').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.seg-btn[data-ticker]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     state.ticker = btn.dataset.ticker;
+    document.getElementById('tickerSearchInput').value = btn.dataset.ticker;
     clearCalloutPriceLines();
     refreshAll();
     loadExpirations();
   });
+});
+
+document.getElementById('tickerSearchForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = document.getElementById('tickerSearchInput');
+  const ticker = input.value.trim().toUpperCase();
+  if (!ticker) return;
+  input.value = ticker;
+  document.querySelectorAll('.seg-btn[data-ticker]').forEach(b => b.classList.remove('active'));
+  const matchingBtn = document.querySelector(`.seg-btn[data-ticker="${ticker}"]`);
+  if (matchingBtn) matchingBtn.classList.add('active');
+  state.ticker = ticker;
+  clearCalloutPriceLines();
+  refreshAll();
+  loadExpirations();
 });
 
 document.getElementById('strategySelect').addEventListener('change', (e) => {
@@ -1225,6 +1264,7 @@ wireRunButton('runBacktestBtn', '/api/backtest/run', '/api/backtest/status', 'Ru
 populatePeriods();
 refreshAll();
 loadExpirations();
+loadWatchlist();
 loadBacktest();
 loadScanner();
 setInterval(refreshAll, 60000); // poll every 60s

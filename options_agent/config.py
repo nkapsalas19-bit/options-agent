@@ -2,6 +2,7 @@
 Central config for the SPY/QQQ options pattern-trading agent.
 Every tunable knob lives here so you're not hunting through modules.
 """
+import os
 
 # ---- Universe ----
 TICKERS = ["SPY", "QQQ"]
@@ -67,7 +68,14 @@ BACKTEST_METRICS_MIN_TRADES = 20   # don't trust a strategy's stats below this t
 # much more so than from a home network. Switch to "sp500" once you've confirmed the
 # watchlist mode works reliably in your actual environment.
 SCANNER_UNIVERSE_MODE = "watchlist"   # "watchlist" (fast, reliable -- see SCANNER_WATCHLIST) or "sp500" (live Wikipedia fetch, ~500 tickers, slow and rate-limit-prone on cloud hosting)
-SCANNER_WATCHLIST = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD"]
+
+# Change which tickers get scanned WITHOUT editing code or redeploying: set an environment
+# variable named SCANNER_WATCHLIST to a comma-separated list (e.g. "SPY,QQQ,AAPL,TSLA") in
+# Render's dashboard (Settings -> Environment) or your shell, then restart/redeploy the
+# service to pick it up. Falls back to the list below if that env var isn't set.
+_default_watchlist = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD"]
+_watchlist_env = os.environ.get("SCANNER_WATCHLIST")
+SCANNER_WATCHLIST = [t.strip().upper() for t in _watchlist_env.split(",") if t.strip()] if _watchlist_env else _default_watchlist
 SCAN_INTERVAL_SECONDS = 300
 NEWS_LOOKBACK_HOURS = 24
 MIN_CONFIDENCE_SCORE = 60     # callouts scoring below this are discarded entirely, not just hidden in the UI
