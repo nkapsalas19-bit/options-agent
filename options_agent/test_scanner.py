@@ -120,6 +120,18 @@ def main():
     assert 0 <= result["confidence_score"] <= 100
     assert isinstance(result["reasons"], list) and result["reasons"]
     assert result["suggested_action"] == "BUY SHARES"
+    assert isinstance(result["summary"], str) and "confidence" in result["summary"].lower()
+
+    print("\n--- risk score ---")
+    print(f"risk_score={result['risk_score']} risk_level={result['risk_level']}")
+    assert 1 <= result["risk_score"] <= 10
+    assert result["risk_level"] in ("LOW", "MODERATE", "HIGH")
+    for kind in ("shares", "option"):
+        assert 1 <= result["risk"][kind]["score"] <= 10
+        assert result["risk"][kind]["reasons"], f"{kind} risk should always have at least one reason"
+    # a short-dated option should never read as LESS risky than holding the shares themselves
+    assert result["risk"]["option"]["score"] >= result["risk"]["shares"]["score"], \
+        "an option leg should never score as less risky than the equivalent shares position"
 
     print("\n--- exit plan ---")
     plan = result["exit_plan"]

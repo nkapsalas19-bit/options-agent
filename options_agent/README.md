@@ -117,6 +117,44 @@ Every callout ships an `exit_plan`, not just an entry idea:
   itself (e.g. "the fast/slow MA re-crosses the other way") — an exit signal
   that can fire *before* the stop-loss price is even touched.
 
+### Risk score (1-10) — separate from confidence, on purpose
+
+Every callout also carries a **risk score**, shown as a color-coded bar next
+to the confidence bar (green/amber/red for LOW/MODERATE/HIGH). This is a
+deliberately different question from confidence: confidence asks "how much
+evidence supports this direction," risk asks "how much could this cost you
+if you're wrong, or even if you're right but slow." A high-confidence
+callout can still be high-risk — e.g. a volatile name with an imminent
+earnings print.
+
+Risk is computed separately for the shares leg and the option leg (an
+option is never scored as *less* risky than the equivalent shares position),
+from:
+- **Volatility** — ATR as a percent of price (`config.RISK_ATR_MED_PCT` /
+  `RISK_ATR_HIGH_PCT`)
+- **Time exposure** — for options, how short-dated the contract is
+  (`config.RISK_DTE_VERY_SHORT` / `RISK_DTE_SHORT` — theta/gamma risk
+  compounds fast on a 2-day contract); for shares, the fact that there's no
+  expiration but full point-for-point exposure
+- **Implied volatility** — expensive premium and IV-crush exposure on a
+  high-IV assumption (`config.RISK_IV_MED` / `RISK_IV_HIGH`)
+- **Earnings proximity** — a print landing inside the expected hold window
+  adds gap risk regardless of direction
+
+Like the reasons list, every risk score comes with its own itemized
+breakdown (visible in the dashboard's expanded "Risk" section) — nothing
+about it is a black box either.
+
+### See it on the chart, not just as text
+
+Every callout has a **"📈 View Chart"** button that loads that exact
+ticker and timeframe into the main chart at the top of the dashboard (daily
+bars for swing, 15-minute bars for intraday) and draws the entry, target,
+and stop directly on the candles as horizontal reference lines. The
+technical reasoning becomes something you can actually look at — the
+crossover or breakout the callout is about is right there on the chart —
+instead of only being a bullet list of numbers.
+
 ### Backtest evidence — the trust layer
 
 A confidence score is only worth trusting if someone checked whether it
@@ -216,6 +254,43 @@ Both write to the same JSON files the dashboard's buttons produce
 (`scanner_results.json`, `scanner_backtest_results.json`), so a scheduled
 script and the on-demand buttons interchange freely — whichever ran most
 recently is what the dashboard shows.
+
+### Accessing the dashboard from your phone or another computer
+
+`python webapp/app.py` only serves `http://localhost:5000` — reachable
+from the same machine it's running on, nothing else. Two ways to get past
+that, from quick-and-free to always-on:
+
+**1. Same WiFi, right now (free, a few minutes):**
+1. Find your computer's local IP address:
+   - Mac: System Settings → Wi-Fi → Details → IP Address
+   - Windows: `ipconfig` in Command Prompt → "IPv4 Address"
+   - Linux: `hostname -I`
+   - It'll look like `192.168.1.23` or `10.0.0.15`.
+2. Keep `python webapp/app.py` running (it already listens on `0.0.0.0`,
+   meaning "every network interface," not just localhost — no code change
+   needed).
+3. On your phone (connected to the **same WiFi network**), visit
+   `http://<that-ip>:5000` — e.g. `http://192.168.1.23:5000`.
+4. This only works while your computer is on, awake, and running the app,
+   and only from devices on the same network (not out on cellular data away
+   from home). If nothing loads, your computer's firewall may be blocking
+   incoming connections on port 5000 — allow it for your local network.
+
+**2. A real URL, reachable from anywhere, anytime (free tier available):**
+This repo already has everything needed for this — see
+[`webapp/DEPLOY.md`](webapp/DEPLOY.md) for the exact click-by-click steps
+to deploy to [Render](https://render.com) (free tier, no credit card).
+Once deployed you get a permanent URL like
+`https://your-app-name.onrender.com` that works from your phone, a friend's
+computer, anywhere — password-gated by `DASHBOARD_PASSWORD`. The free
+tier sleeps after 15 minutes of no traffic and takes 30-60 seconds to wake
+back up on the next visit; fine for personal use.
+
+One thing to set up either way before relying on it: **change
+`DASHBOARD_PASSWORD` from its default** (`changeme123`) via the environment
+variable described in `webapp/app.py` — anyone who finds the URL can see
+your callouts and trigger scans/backtests otherwise.
 
 ### Email alerts
 

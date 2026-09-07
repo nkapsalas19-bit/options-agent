@@ -121,6 +121,17 @@ EARNINGS_BLACKOUT_DAYS = 5   # flag if an earnings print falls within max(this, 
 EARNINGS_PENALTY = 10
 SECTOR_CONFIRMATION_BONUS = 5   # best-effort: is the whole sector ETF moving the same way, not just this name?
 
+# ---- Risk score (1-10) ----
+# Deliberately separate from the confidence score above: confidence is "how much
+# evidence supports this direction", risk is "how much could this cost you if wrong
+# (or slow)". A high-confidence callout can still be high-risk.
+RISK_ATR_HIGH_PCT = 0.045   # ATR/price at or above this scores as high volatility
+RISK_ATR_MED_PCT = 0.02     # ATR/price at or above this scores as moderate volatility
+RISK_DTE_VERY_SHORT = 3     # option DTE at/below this scores as very short-dated (theta/gamma risk)
+RISK_DTE_SHORT = 10         # option DTE at/below this scores as short-dated
+RISK_IV_HIGH = 0.40         # assumed IV at/above this scores as high (expensive premium, IV-crush exposure)
+RISK_IV_MED = 0.25
+
 # ---- Email alerts (Gmail SMTP) ----
 # Set these as environment variables -- never hardcode credentials in this file:
 #   GMAIL_ADDRESS       the Gmail account to send alerts from

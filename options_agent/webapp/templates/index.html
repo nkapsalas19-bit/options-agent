@@ -359,7 +359,47 @@
     overflow: hidden;
   }
   .conf-bar-fill { height: 100%; background: var(--blue); }
+  .risk-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 90px;
+  }
+  .risk-bar-track {
+    width: 50px; height: 6px;
+    background: rgba(107,114,128,0.2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .risk-bar-fill.low { background: var(--green); }
+  .risk-bar-fill.moderate { background: var(--amber); }
+  .risk-bar-fill.high { background: var(--red); }
+  .risk-label { font-size: 9px; text-transform: uppercase; }
+  .risk-label.low { color: var(--green); }
+  .risk-label.moderate { color: var(--amber); }
+  .risk-label.high { color: var(--red); }
   .callout-caret { color: var(--text-dim); font-size: 10px; width: 14px; text-align: center; }
+  .callout-summary-line {
+    font-size: 12px;
+    color: #e8eaef;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: rgba(77,158,255,0.06);
+    border-left: 2px solid var(--blue);
+    border-radius: 2px;
+  }
+  .view-chart-btn {
+    background: transparent;
+    border: 1px solid var(--blue);
+    color: var(--blue);
+    padding: 4px 10px;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 12px;
+  }
+  .view-chart-btn:hover { background: rgba(77,158,255,0.1); }
   .callout-details {
     display: none;
     padding: 4px 14px 16px 14px;
@@ -625,6 +665,59 @@ function clearOverlays() {
   overlaySeries = {};
 }
 
+let calloutPriceLines = [];
+
+function clearCalloutPriceLines() {
+  calloutPriceLines.forEach(line => {
+    try { candleSeries.removePriceLine(line); } catch (e) { /* already gone */ }
+  });
+  calloutPriceLines = [];
+}
+
+/**
+ * Loads a scanner callout's ticker/timeframe into the main chart above and
+ * draws its entry/target/stop as reference lines directly on the candles --
+ * so the technical reasoning is something you can actually SEE, not just
+ * read as text. Uses the shares side of the exit plan for the price lines
+ * since those are on the underlying's own price scale (the option side is
+ * priced in premium dollars, a different scale entirely).
+ */
+async function loadCalloutChart(c) {
+  const firedBollinger = (c.reasons || []).some(r => r.startsWith('Bollinger'));
+  const firedMaRsi = (c.reasons || []).some(r => r.startsWith('MA/RSI'));
+  state.strategy = (firedBollinger && !firedMaRsi) ? 'bb_squeeze_breakout' : 'ma_rsi';
+  document.getElementById('strategySelect').value = state.strategy;
+
+  state.ticker = c.ticker;
+  state.interval = c.timeframe === 'intraday' ? '15m' : '1d';
+  document.getElementById('intervalSelect').value = state.interval;
+  populatePeriods();
+  state.period = c.timeframe === 'intraday' ? '5d' : '6mo';
+  document.getElementById('periodSelect').value = state.period;
+
+  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+  const matchingBtn = document.querySelector(`.seg-btn[data-ticker="${c.ticker}"]`);
+  if (matchingBtn) matchingBtn.classList.add('active');
+
+  document.getElementById('chart').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  await refreshAll();
+  loadExpirations();
+
+  clearCalloutPriceLines();
+  const shares = c.exit_plan && c.exit_plan.shares;
+  if (!shares) return;
+  calloutPriceLines.push(candleSeries.createPriceLine({
+    price: c.spot, color: '#6b7280', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, title: 'Entry',
+  }));
+  calloutPriceLines.push(candleSeries.createPriceLine({
+    price: shares.profit_target, color: '#00d9a3', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Target',
+  }));
+  calloutPriceLines.push(candleSeries.createPriceLine({
+    price: shares.stop_loss, color: '#ff4757', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'Stop',
+  }));
+}
+
 function showError(msg) {
   const banner = document.getElementById('errorBanner');
   banner.textContent = '⚠ ' + msg;
@@ -636,12 +729,18 @@ function clearError() {
 }
 
 async function loadChart() {
+  const requestedTicker = state.ticker, requestedStrategy = state.strategy,
+        requestedInterval = state.interval, requestedPeriod = state.period;
   try {
-    const res = await fetch(`/api/chart/${state.ticker}?strategy=${state.strategy}&interval=${state.interval}&period=${state.period}`);
+    const res = await fetch(`/api/chart/${requestedTicker}?strategy=${requestedStrategy}&interval=${requestedInterval}&period=${requestedPeriod}`);
     if (res.status === 401) { window.location.href = '/login'; return; }
     if (!res.ok) { showError(`Chart request failed (HTTP ${res.status}). Is the Flask server running?`); return; }
     const data = await res.json();
     if (data.error) { showError(data.error); return; }
+    if (state.ticker !== requestedTicker || state.strategy !== requestedStrategy ||
+        state.interval !== requestedInterval || state.period !== requestedPeriod) {
+      return; // superseded by a newer request (e.g. rapid ticker/timeframe switch) -- drop the stale response
+    }
 
     candleSeries.setData(data.candles);
     candleSeries.setMarkers(data.markers);
@@ -667,12 +766,14 @@ async function loadChart() {
 }
 
 async function loadAlert() {
+  const requestedTicker = state.ticker, requestedStrategy = state.strategy;
   try {
-    const res = await fetch(`/api/alert/${state.ticker}?strategy=${state.strategy}`);
+    const res = await fetch(`/api/alert/${requestedTicker}?strategy=${requestedStrategy}`);
     if (res.status === 401) { window.location.href = '/login'; return; }
     if (!res.ok) return;
     const d = await res.json();
     if (d.error) return;
+    if (state.ticker !== requestedTicker || state.strategy !== requestedStrategy) return;
 
   const badge = document.getElementById('suggestionBadge');
   badge.textContent = d.suggestion === 'NONE' ? 'NO SIGNAL' : `${d.suggestion} · ${d.ticker}`;
@@ -695,35 +796,56 @@ async function loadAlert() {
   }
 }
 
-function refreshAll() {
-  loadChart();
-  loadAlert();
+async function refreshAll() {
+  await Promise.all([loadChart(), loadAlert()]);
 }
 
 async function loadExpirations() {
-  const res = await fetch(`/api/expirations/${state.ticker}`);
-  const d = await res.json();
-  const sel = document.getElementById('expirationSelect');
-  sel.innerHTML = '';
-  d.expirations.forEach(exp => {
-    const opt = document.createElement('option');
-    opt.value = exp; opt.textContent = exp;
-    sel.appendChild(opt);
-  });
-  state.expiration = d.expirations[0];
-  sel.value = state.expiration;
-  document.getElementById('chainTicker').textContent = state.ticker;
-  loadChain();
+  // Guard against out-of-order responses: if the user (or loadCalloutChart)
+  // switches tickers again before this request lands, a stale response for
+  // the OLD ticker must not overwrite the chain with data for the wrong
+  // symbol -- even though the ticker label itself reads state.ticker live
+  // (so it never shows the wrong name), the underlying rows could otherwise
+  // still end up stale/mismatched. Same pattern in loadChart/loadAlert/loadChain.
+  const requestedTicker = state.ticker;
+  try {
+    const res = await fetch(`/api/expirations/${requestedTicker}`);
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const d = await res.json();
+    if (state.ticker !== requestedTicker) return; // superseded by a newer ticker switch
+
+    const sel = document.getElementById('expirationSelect');
+    sel.innerHTML = '';
+    (d.expirations || []).forEach(exp => {
+      const opt = document.createElement('option');
+      opt.value = exp; opt.textContent = exp;
+      sel.appendChild(opt);
+    });
+    state.expiration = d.expirations && d.expirations[0];
+    sel.value = state.expiration || '';
+    document.getElementById('chainTicker').textContent = state.ticker;
+    loadChain();
+  } catch (e) {
+    // stay quiet; the chart panel already surfaces connection errors
+  }
 }
 
 async function loadChain() {
-  if (!state.expiration) return;
-  const res = await fetch(`/api/chain/${state.ticker}?expiration=${state.expiration}`);
-  const d = await res.json();
-  document.getElementById('chainSyntheticFlag').style.display = d.is_synthetic ? 'inline' : 'none';
+  const requestedTicker = state.ticker;
+  const requestedExpiration = state.expiration;
+  if (!requestedExpiration) return;
+  try {
+    const res = await fetch(`/api/chain/${requestedTicker}?expiration=${requestedExpiration}`);
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const d = await res.json();
+    if (state.ticker !== requestedTicker || state.expiration !== requestedExpiration) return;
 
-  fillChainTable('callsTable', d.calls, d.spot);
-  fillChainTable('putsTable', d.puts, d.spot);
+    document.getElementById('chainSyntheticFlag').style.display = d.is_synthetic ? 'inline' : 'none';
+    fillChainTable('callsTable', d.calls, d.spot);
+    fillChainTable('putsTable', d.puts, d.spot);
+  } catch (e) {
+    // stay quiet; the chart panel already surfaces connection errors
+  }
 }
 
 function fillChainTable(tableId, rows, spot) {
@@ -748,6 +870,28 @@ function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s == null ? '' : String(s);
   return div.innerHTML;
+}
+
+function renderRiskDetail(c) {
+  const risk = c.risk;
+  if (!risk) return '';
+
+  const box = (title, r) => `
+    <div class="exit-box">
+      <div class="exit-title">${escapeHtml(title)} — <span class="risk-label ${r.level.toLowerCase()}">${escapeHtml(r.level)} ${r.score}/10</span></div>
+      <ul style="margin:4px 0 0; padding-left:16px; font-size:10px; color:var(--text-dim);">
+        ${r.reasons.map(x => `<li>${escapeHtml(x)}</li>`).join('')}
+      </ul>
+    </div>
+  `;
+
+  return `
+    <h4>Risk</h4>
+    <div class="exit-grid">
+      ${box('If shares', risk.shares)}
+      ${box('If option', risk.option)}
+    </div>
+  `;
 }
 
 function renderExitPlan(c) {
@@ -916,6 +1060,7 @@ async function loadScanner() {
       const actionLabel = c.instrument_primary === 'option'
         ? `${c.suggested_action} $${c.option_alt.strike} exp ${c.option_alt.expiration_date}`
         : c.suggested_action;
+      const riskClass = (c.risk_level || 'moderate').toLowerCase();
 
       card.innerHTML = `
         <div class="callout-summary" data-idx="${i}">
@@ -925,14 +1070,21 @@ async function loadScanner() {
           <span class="callout-action">${escapeHtml(actionLabel)}</span>
           <span class="callout-spot">$${c.spot.toFixed(2)}</span>
           <div class="conf-bar-wrap">
-            <span>${c.confidence_score.toFixed(0)}</span>
+            <span title="Confidence">${c.confidence_score.toFixed(0)}</span>
             <div class="conf-bar-track"><div class="conf-bar-fill" style="width:${Math.min(c.confidence_score, 100)}%"></div></div>
+          </div>
+          <div class="risk-bar-wrap">
+            <span class="risk-label ${riskClass}">${escapeHtml(c.risk_level)} ${c.risk_score}/10</span>
+            <div class="risk-bar-track"><div class="risk-bar-fill ${riskClass}" style="width:${c.risk_score * 10}%"></div></div>
           </div>
           <span class="callout-caret">▾</span>
         </div>
         <div class="callout-details" id="calloutDetails${i}">
+          <div class="callout-summary-line">${escapeHtml(c.summary)}</div>
+          <button class="view-chart-btn" data-ticker="${escapeHtml(c.ticker)}" data-timeframe="${escapeHtml(c.timeframe)}" data-idx="${i}">📈 View Chart</button>
           <h4>Why</h4>
           <ul>${reasonsHtml}</ul>
+          ${renderRiskDetail(c)}
           ${renderExitPlan(c)}
         </div>
       `;
@@ -945,6 +1097,14 @@ async function loadScanner() {
         details.classList.toggle('open');
       });
     });
+
+    container.querySelectorAll('.view-chart-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation(); // don't also toggle the details panel closed
+        const idx = parseInt(btn.dataset.idx, 10);
+        loadCalloutChart(d.callouts[idx]);
+      });
+    });
   } catch (e) {
     // stay quiet; the chart panel already surfaces connection errors
   }
@@ -955,6 +1115,7 @@ document.querySelectorAll('.seg-btn').forEach(btn => {
     document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     state.ticker = btn.dataset.ticker;
+    clearCalloutPriceLines();
     refreshAll();
     loadExpirations();
   });
@@ -962,17 +1123,20 @@ document.querySelectorAll('.seg-btn').forEach(btn => {
 
 document.getElementById('strategySelect').addEventListener('change', (e) => {
   state.strategy = e.target.value;
+  clearCalloutPriceLines();
   refreshAll();
 });
 
 document.getElementById('intervalSelect').addEventListener('change', (e) => {
   state.interval = e.target.value;
   populatePeriods();
+  clearCalloutPriceLines();
   refreshAll();
 });
 
 document.getElementById('periodSelect').addEventListener('change', (e) => {
   state.period = e.target.value;
+  clearCalloutPriceLines();
   refreshAll();
 });
 

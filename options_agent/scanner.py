@@ -286,14 +286,102 @@ def _news_score(ticker, direction):
     return 0, [f"news sentiment neutral ({sentiment:+.2f} avg over {count_note})"]
 
 
-def _earnings_penalty(ticker, dte):
-    days = days_until_earnings(ticker)
-    if days is None:
+def _earnings_penalty(earnings_days, dte):
+    if earnings_days is None:
         return 0, []
-    if 0 <= days <= max(dte, config.EARNINGS_BLACKOUT_DAYS):
-        return -config.EARNINGS_PENALTY, [f"EARNINGS in {days}d, inside the option's {dte}-day window -- "
+    if 0 <= earnings_days <= max(dte, config.EARNINGS_BLACKOUT_DAYS):
+        return -config.EARNINGS_PENALTY, [f"EARNINGS in {earnings_days}d, inside the option's {dte}-day window -- "
                                            f"IV crush risk after the print; size down or skip the option leg"]
     return 0, []
+
+
+def _risk_level(instrument, atr_pct, hold_period, iv=None, earnings_days=None):
+    """A 1-10 risk score -- deliberately separate from the confidence score.
+    Confidence answers "how much evidence supports this direction"; this
+    answers "how much could being wrong (or even being right, but late) cost
+    you." A high-confidence callout can still be high-risk (e.g. a volatile
+    name with an imminent earnings print), and that distinction matters more
+    than either number alone."""
+    reasons = []
+
+    if atr_pct >= config.RISK_ATR_HIGH_PCT:
+        score = 3
+        reasons.append(f"high volatility -- recent ATR is {atr_pct*100:.1f}% of price")
+    elif atr_pct >= config.RISK_ATR_MED_PCT:
+        score = 2
+        reasons.append(f"moderate volatility -- recent ATR is {atr_pct*100:.1f}% of price")
+    else:
+        score = 1
+        reasons.append(f"low volatility -- recent ATR is {atr_pct*100:.1f}% of price")
+
+    if instrument == "option":
+        dte = hold_period
+        if dte <= config.RISK_DTE_VERY_SHORT:
+            score += 4
+            reasons.append(f"very short-dated option ({dte:.0f}d) -- high theta/gamma risk, can lose value fast even if the direction is right")
+        elif dte <= config.RISK_DTE_SHORT:
+            score += 3
+            reasons.append(f"short-dated option ({dte:.0f}d) -- meaningful theta decay works against you")
+        else:
+            score += 2
+            reasons.append(f"{dte:.0f}-day option -- more time for the thesis to play out, but still leveraged and decaying")
+
+        if iv is not None:
+            if iv >= config.RISK_IV_HIGH:
+                score += 2
+                reasons.append(f"high assumed implied volatility ({iv*100:.0f}%) -- expensive premium, exposed to IV crush")
+            elif iv >= config.RISK_IV_MED:
+                score += 1
+    else:
+        score += 1
+        reasons.append("shares -- no expiration or time decay, but full dollar-for-dollar exposure to the move")
+
+    if earnings_days is not None and earnings_days <= hold_period:
+        score += 2
+        reasons.append(f"earnings in {earnings_days}d, inside the expected hold window -- gap risk on the print")
+
+    return max(1, min(10, score)), reasons
+
+
+def _risk_label(score):
+    if score <= 3:
+        return "LOW"
+    if score <= 6:
+        return "MODERATE"
+    return "HIGH"
+
+
+def _build_summary(direction, tech_reasons, news_score, sector_bonus, earnings_penalty, confidence):
+    """A one-sentence, plain-English synthesis of WHY this callout fired,
+    built from the same structured facts as the itemized reasons list below
+    it (not a separate guess) -- meant to be read in two seconds, with the
+    bullet list underneath for anyone who wants the specifics verified."""
+    dir_word = "bullish" if direction == 1 else "bearish"
+    n_agree = sum(1 for r in tech_reasons if r.startswith(("MA/RSI", "Bollinger")))
+
+    bits = [f"{n_agree} technical signal{'s' if n_agree != 1 else ''} agreeing {dir_word}"]
+    if any(r.startswith("trend filter") and "aligned" in r for r in tech_reasons):
+        bits.append("the trend filter confirms")
+    if any(r.startswith("higher-timeframe") and "aligned" in r for r in tech_reasons):
+        bits.append("the daily trend agrees")
+    if any("relative strength" in r and ("leader" in r or "genuine weakness" in r) for r in tech_reasons):
+        bits.append("relative strength backs it up")
+    if news_score > 0:
+        bits.append("news sentiment supports it")
+    elif news_score < 0:
+        bits.append("news sentiment actually conflicts (dragging the score down)")
+    if sector_bonus > 0:
+        bits.append("the whole sector is moving too")
+    if earnings_penalty < 0:
+        bits.append("but there's earnings risk in the window")
+
+    if len(bits) == 1:
+        joined = bits[0]
+    else:
+        joined = ", ".join(bits[:-1]) + ", and " + bits[-1]
+
+    sentence = joined[0].upper() + joined[1:]
+    return f"{sentence} -- confidence {confidence:.0f}/100."
 
 
 def _sector_confirmation(ticker, direction):
@@ -322,7 +410,19 @@ def _hold_days_for_projection(instrument):
     return (config.INTRADAY_MAX_HOLD_BARS * 15) / (6.5 * 60)  # bars -> minutes -> fraction of a 6.5h trading day
 
 
-def _build_exit_plan(direction, instrument, spot, df, tf_cfg, entry_option_price=None, option_type=None,
+def _compute_atr_val(df, spot):
+    """ATR, with a floor fallback if there isn't enough history yet. Computed
+    once per callout and shared between the exit plan and the risk score, so
+    both are reading the same number rather than two separate calculations
+    that could theoretically drift."""
+    atr_series = atr_indicator(df, config.ATR_PERIOD)
+    atr_val = atr_series.iloc[-1] if len(atr_series) else np.nan
+    if np.isnan(atr_val) or atr_val <= 0:
+        atr_val = spot * 0.02  # fallback: ~2% of price if ATR isn't computable yet (short history)
+    return atr_val
+
+
+def _build_exit_plan(direction, instrument, spot, atr_val, entry_option_price=None, option_type=None,
                       dte=None, strike=None, iv=None):
     """Produces concrete, numeric exit rules -- not just a score. Shares use
     ATR-scaled stop/target so the levels reflect this ticker's actual recent
@@ -337,11 +437,6 @@ def _build_exit_plan(direction, instrument, spot, df, tf_cfg, entry_option_price
     same IV assumption. This directly answers "what is this betting the
     stock will do" instead of leaving the option's stop/target as an
     unrelated flat-percent rule."""
-    atr_series = atr_indicator(df, config.ATR_PERIOD)
-    atr_val = atr_series.iloc[-1] if len(atr_series) else np.nan
-    if np.isnan(atr_val) or atr_val <= 0:
-        atr_val = spot * 0.02  # fallback: ~2% of price if ATR isn't computable yet (short history)
-
     sign = 1 if direction == 1 else -1
     shares_stop = spot - sign * config.ATR_STOP_MULT * atr_val
     shares_target = spot + sign * config.ATR_TARGET_MULT * atr_val
@@ -444,7 +539,8 @@ def scan_ticker(ticker, timeframe_name, daily_df=None, benchmark_df=None):
     dte = tf_cfg["target_dte"]
     est_option_price = bs_price(spot, strike, dte, iv, config.RISK_FREE_RATE, option_type)
 
-    earnings_penalty, earnings_reasons = _earnings_penalty(ticker, dte)
+    earnings_days = days_until_earnings(ticker)
+    earnings_penalty, earnings_reasons = _earnings_penalty(earnings_days, dte)
     sector_bonus, sector_reasons = _sector_confirmation(ticker, direction)
     reasons = reasons + earnings_reasons + sector_reasons
 
@@ -456,11 +552,24 @@ def scan_ticker(ticker, timeframe_name, daily_df=None, benchmark_df=None):
         "SHORT / SELL SHARES" if tf_cfg["instrument"] == "shares" else f"BUY {option_type.upper()}"
     )
 
+    atr_val = _compute_atr_val(df, spot)
     exit_plan = _build_exit_plan(
-        direction, tf_cfg["instrument"], spot, df, tf_cfg,
+        direction, tf_cfg["instrument"], spot, atr_val,
         entry_option_price=est_option_price, option_type=option_type, dte=dte, strike=strike, iv=iv,
     )
     expiration_date = (datetime.now() + timedelta(days=dte)).strftime("%Y-%m-%d")
+
+    hold_period = _hold_days_for_projection(tf_cfg["instrument"])
+    atr_pct = atr_val / spot if spot else 0
+    shares_risk_score, shares_risk_reasons = _risk_level("shares", atr_pct, hold_period, earnings_days=earnings_days)
+    option_risk_score, option_risk_reasons = _risk_level("option", atr_pct, dte, iv=iv, earnings_days=earnings_days)
+    risk = {
+        "shares": {"score": shares_risk_score, "level": _risk_label(shares_risk_score), "reasons": shares_risk_reasons},
+        "option": {"score": option_risk_score, "level": _risk_label(option_risk_score), "reasons": option_risk_reasons},
+    }
+    primary_risk = risk["shares"] if tf_cfg["instrument"] == "shares" else risk["option"]
+
+    summary = _build_summary(direction, tech_reasons, news_score, sector_bonus, earnings_penalty, confidence)
 
     return {
         "ticker": ticker,
@@ -468,12 +577,16 @@ def scan_ticker(ticker, timeframe_name, daily_df=None, benchmark_df=None):
         "direction": "BULLISH" if direction == 1 else "BEARISH",
         "suggested_action": suggested_action,
         "instrument_primary": tf_cfg["instrument"],
+        "summary": summary,
         "option_alt": {
             "type": option_type, "strike": strike, "dte_days": dte,
             "expiration_date": expiration_date,
             "est_price": round(est_option_price, 2), "iv_assumed": iv,
         },
         "confidence_score": round(confidence, 1),
+        "risk_score": primary_risk["score"],
+        "risk_level": primary_risk["level"],
+        "risk": risk,
         "spot": round(spot, 2),
         "reasons": reasons,
         "exit_plan": exit_plan,
