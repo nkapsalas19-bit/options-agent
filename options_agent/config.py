@@ -58,7 +58,15 @@ BACKTEST_METRICS_MIN_TRADES = 20   # don't trust a strategy's stats below this t
 # yfinance nor free news endpoints push true per-second updates -- a full sweep of the
 # configured universe takes real wall-clock time (market_scanner.py prints it each cycle).
 # Set SCAN_INTERVAL_SECONDS to at least that duration, or switch to a smaller watchlist.
-SCANNER_UNIVERSE_MODE = "sp500"    # "sp500" (live Wikipedia fetch, falls back to a curated liquid subset -- see universe.py) or "watchlist"
+#
+# Defaults to "watchlist" (a short, fast, reliable list) rather than "sp500" (~500 tickers)
+# on purpose: a full S&P 500 sweep means ~500 sequential calls to Yahoo Finance, which is
+# both slow on constrained hosting (like a free-tier cloud instance) AND a well-known way to
+# get rate-limited or blocked outright -- Yahoo's anti-scraping measures are especially
+# aggressive toward requests coming from cloud-provider IP ranges (AWS/GCP/Render/etc.),
+# much more so than from a home network. Switch to "sp500" once you've confirmed the
+# watchlist mode works reliably in your actual environment.
+SCANNER_UNIVERSE_MODE = "watchlist"   # "watchlist" (fast, reliable -- see SCANNER_WATCHLIST) or "sp500" (live Wikipedia fetch, ~500 tickers, slow and rate-limit-prone on cloud hosting)
 SCANNER_WATCHLIST = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD"]
 SCAN_INTERVAL_SECONDS = 300
 NEWS_LOOKBACK_HOURS = 24

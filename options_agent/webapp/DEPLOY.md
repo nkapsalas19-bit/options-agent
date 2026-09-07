@@ -51,8 +51,18 @@ Directory didn't point at the folder that actually contains it.)
 | **Root Directory** | `options_agent/webapp` |
 | **Runtime** | Python 3 |
 | **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120` |
+| **Start Command** | `gunicorn app:app --bind 0.0.0.0:$PORT --worker-class gthread --threads 4 --timeout 300` |
 | **Instance Type** | Free |
+
+The "Scan Now"/"Run Backtest" buttons run in a background thread inside the
+same process, while the page keeps polling a separate status endpoint for
+progress. Plain gunicorn (`--worker-class sync`, the default) handles one
+request at a time per worker and can starve that polling under load; `gthread`
+with a few threads is built for exactly this pattern. `--timeout 300` gives
+a slow scan (large universe, or a sluggish free-tier instance) more room
+before gunicorn decides the worker is unresponsive and restarts it — a
+restart wipes the in-progress job's state, which looks like "it's been
+running forever with nothing happening."
 
 6. Under **Environment Variables**, add:
 
@@ -81,6 +91,16 @@ Directory didn't point at the folder that actually contains it.)
 - If the build fails, check the **Logs** tab first — the two most common
   causes are Root Directory pointing at the wrong folder (see above) and a
   missing package in `options_agent/webapp/requirements.txt`.
+- **If "Scan Now" spins for a long time with nothing happening**: check the
+  **Logs** tab for lines starting with `[scanner]`. The scanner's default
+  universe (`config.SCANNER_UNIVERSE_MODE = "watchlist"`, 10 tickers) should
+  finish in well under a minute even on the free tier. If it's still slow or
+  the logs show repeated fetch failures, Yahoo Finance is likely
+  rate-limiting or blocking requests from Render's IP range — a known
+  limitation of the free `yfinance` data source on cloud hosting in general,
+  not specific to this app. There's no code fix for that short of a paid
+  market-data API; retrying later or reducing `SCANNER_WATCHLIST` further
+  are the practical workarounds.
 
 ## Why "Root Directory: options_agent/webapp" matters
 

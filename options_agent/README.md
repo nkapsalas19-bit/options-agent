@@ -219,7 +219,15 @@ scanner output.
   domain phrasing (e.g. "beats guidance" vs. "warns of headwinds").
 - **A full universe sweep takes real time**, not a second. `market_scanner.py`
   prints each cycle's actual duration — set `config.SCAN_INTERVAL_SECONDS` to
-  at least that, or scan fewer tickers via `SCANNER_UNIVERSE_MODE = "watchlist"`.
+  at least that. `config.SCANNER_UNIVERSE_MODE` defaults to `"watchlist"`
+  (the short list in `config.SCANNER_WATCHLIST`) rather than `"sp500"`
+  (~500 tickers) for exactly this reason, with a second one on top: Yahoo
+  Finance is known to rate-limit or block requests from cloud-hosting IP
+  ranges (AWS/GCP/Render/etc.) much more aggressively than from a home
+  network, so a full S&P 500 sweep is both slower AND more likely to fail
+  outright when this is deployed rather than run locally. Switch to
+  `"sp500"` once you've confirmed watchlist mode is reliable in your actual
+  hosting environment.
 
 ### One-click dashboard — no terminal required after setup
 
@@ -229,9 +237,10 @@ Once the dashboard is running (`python webapp/app.py`, visit
 - **"Scan Now"** (Market Scanner panel) triggers a full sweep of the
   configured universe in the background and refreshes the callout list when
   it's done. The button shows a live timer and stays disabled while it
-  works — a full S&P 500 sweep is a genuinely slow operation on free data
-  (see "Honest limits" above), not an instant action, so the button is
-  built to make that wait visible rather than pretend it's instant.
+  works. The default watchlist (10 tickers) should finish in well under a
+  minute; switching to `"sp500"` mode makes this a genuinely slow operation
+  on free data (see "Honest limits" above), so the button is built to make
+  that wait visible rather than pretend it's instant.
 - **"Run Backtest"** (Backtest Evidence panel) triggers
   `scanner_backtest.py` the same way — background job, live timer,
   auto-refresh on completion.
