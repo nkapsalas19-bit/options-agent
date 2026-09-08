@@ -828,6 +828,7 @@
   </div>
 
   <div id="scannerEmpty" class="scanner-empty" style="display:none;"></div>
+  <div id="scannerNearMiss" class="scanner-meta" style="display:none; margin-bottom:10px;"></div>
   <div id="scannerCards"></div>
   <div class="footer-note">
     Confidence is a transparent 0-100 rule score (technical agreement + relative strength +
@@ -1504,16 +1505,29 @@ async function loadScanner() {
 
     const container = document.getElementById('scannerCards');
     const empty = document.getElementById('scannerEmpty');
+    const nearMiss = document.getElementById('scannerNearMiss');
     container.innerHTML = '';
 
     if (!d.callouts || d.callouts.length === 0) {
       empty.style.display = 'block';
       empty.textContent = d.generated_at
-        ? 'No callouts above the confidence threshold this cycle.'
+        ? 'No callouts above the confidence threshold this cycle. This is normal, not a bug -- the technical strategies behind this only fire on the exact bar a crossover/breakout happens, so most scans on most days find nothing on a short ticker list.'
         : (d.note || 'Scanner has not run yet.');
+      if (d.near_misses && d.near_misses.length) {
+        nearMiss.style.display = 'block';
+        const items = d.near_misses.map(m => {
+          const when = m.bars_ago === 0 ? 'today' : `${m.bars_ago} trading day${m.bars_ago > 1 ? 's' : ''} ago`;
+          return `${escapeHtml(m.ticker)} (${escapeHtml(m.direction)} signal ${when}, technical score `
+               + `${m.tech_score}/${m.tech_score_max} -- below the ${d.min_confidence_score || 60} needed)`;
+        }).join(' · ');
+        nearMiss.textContent = `Recent activity that didn't clear the bar: ${items}`;
+      } else {
+        nearMiss.style.display = 'none';
+      }
       return;
     }
 
+    nearMiss.style.display = 'none';
     empty.style.display = 'none';
 
     d.callouts.forEach((c, i) => {

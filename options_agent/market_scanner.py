@@ -105,9 +105,10 @@ def run_once(tickers=None):
     config.SCANNER_WATCHLIST or requiring a redeploy."""
     tickers = tickers if tickers is not None else get_scan_universe()
     start = time.time()
-    callouts = scan_universe(tickers)
+    callouts, near_misses = scan_universe(tickers)
     elapsed = time.time() - start
-    print(f"[scanner] swept {len(tickers)} tickers in {elapsed:.1f}s -> {len(callouts)} callouts >= {config.MIN_CONFIDENCE_SCORE}")
+    print(f"[scanner] swept {len(tickers)} tickers in {elapsed:.1f}s -> {len(callouts)} callouts >= {config.MIN_CONFIDENCE_SCORE}"
+          f" ({len(near_misses)} near-misses)")
 
     _save_json(RESULTS_PATH, {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -115,6 +116,8 @@ def run_once(tickers=None):
         "tickers_scanned": tickers,
         "cycle_seconds": round(elapsed, 1),
         "callouts": callouts,
+        "near_misses": near_misses,
+        "min_confidence_score": config.MIN_CONFIDENCE_SCORE,
     })
 
     alerted = set(_load_json(ALERTED_PATH, []))

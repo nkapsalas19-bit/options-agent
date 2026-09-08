@@ -343,7 +343,8 @@ def scanner_results():
     (see /api/scan below) or from python market_scanner.py run separately."""
     if not os.path.exists(SCANNER_RESULTS_PATH):
         return jsonify({
-            "generated_at": None, "universe_size": 0, "tickers_scanned": [], "cycle_seconds": None, "callouts": [],
+            "generated_at": None, "universe_size": 0, "tickers_scanned": [], "cycle_seconds": None,
+            "callouts": [], "near_misses": [], "min_confidence_score": config.MIN_CONFIDENCE_SCORE,
             "note": "Scanner hasn't run yet. Start it separately with: python market_scanner.py",
         })
     with open(SCANNER_RESULTS_PATH) as f:

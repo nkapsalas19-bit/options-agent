@@ -59,6 +59,8 @@ from news import get_news_sentiment
 from fundamentals import days_until_earnings, get_sector_etf
 from options_pricing import bs_price, select_strike
 
+RECENT_SIGNAL_LOOKBACK_BARS = 5   # how many recent daily bars scan_universe's near-miss diagnostic checks back
+
 TIMEFRAME_STRATEGIES = {
     "swing": {
         "interval": "1d",
@@ -612,10 +614,13 @@ def scan_universe(tickers, timeframe_names=None):
             print(f"[scanner] {ticker} daily fetch failed: {e}")
 
     callouts = []
+    near_misses = []
+    swing_cfg = TIMEFRAME_STRATEGIES["swing"]
     for ticker in unique_tickers:
         daily_df = daily_cache.get(ticker)
         if daily_df is None or len(daily_df) < 30:
             continue
+        had_swing_callout = False
         for tf_name in timeframe_names:
             try:
                 result = scan_ticker(ticker, tf_name, daily_df=daily_df, benchmark_df=benchmark_df)
@@ -624,6 +629,46 @@ def scan_universe(tickers, timeframe_names=None):
                 result = None
             if result:
                 callouts.append(result)
+                if tf_name == "swing":
+                    had_swing_callout = True
+
+        if had_swing_callout or "swing" not in timeframe_names:
+            continue
+
+        # Near-miss diagnostic (swing only -- reuses the daily data already
+        # fetched above, no extra network calls): both swing strategies only
+        # fire a signal on the exact bar an MA crossover / BB squeeze breakout
+        # happens, so most tickers on most days have no signal at all -- a
+        # scan finding zero callouts is very often correct, not broken. Check
+        # the last few bars (not just today) for the most recent real event on
+        # each ticker, whether or not it would have cleared the confidence
+        # bar, so a scan that finds nothing actionable still shows *something*
+        # rather than looking dead. Skipped for a ticker that already produced
+        # a real swing callout above, so nothing shows up twice.
+        for bars_ago in range(RECENT_SIGNAL_LOOKBACK_BARS):
+            idx = -1 - bars_ago
+            if -idx > len(daily_df):
+                break
+            try:
+                rs_value = relative_strength_excess(daily_df, benchmark_df, idx=idx) if benchmark_df is not None else None
+                direction, tech_score, reasons, discarded = backtestable_score(
+                    daily_df, swing_cfg["strategies"],
+                    trend_filter_period=swing_cfg["trend_filter_period"],
+                    trend_filter_hard=swing_cfg["trend_filter_hard"],
+                    idx=idx, rs_value=rs_value,
+                )
+            except Exception:
+                direction, tech_score, reasons, discarded = 0, 0, [], False
+            if direction != 0 and not discarded:
+                near_misses.append({
+                    "ticker": ticker, "timeframe": "swing",
+                    "direction": "BULLISH" if direction == 1 else "BEARISH",
+                    "tech_score": tech_score, "tech_score_max": config.BACKTESTABLE_SCORE_MAX,
+                    "bars_ago": bars_ago,
+                    "reasons": reasons,
+                })
+                break  # most recent event only, not every bar further back too
 
     callouts.sort(key=lambda c: c["confidence_score"], reverse=True)
-    return callouts
+    near_misses.sort(key=lambda m: m["tech_score"], reverse=True)
+    return callouts, near_misses[:5]
