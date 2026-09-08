@@ -236,7 +236,7 @@ def run_and_save(tickers=None, timeframe_names=None):
 
     with open(RESULTS_PATH, "w") as f:
         json.dump({"report": report, "generated_at": pd.Timestamp.now().isoformat(timespec="seconds"),
-                    "universe_size": len(tickers)}, f, indent=2, default=str)
+                    "universe_size": len(tickers), "trades": trades}, f, indent=2, default=str)
     return report, trades
 
 

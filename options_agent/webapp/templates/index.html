@@ -677,6 +677,44 @@
     border-bottom: 1px solid rgba(31,37,48,0.5);
     color: var(--text);
   }
+  .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .bt-trades-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 10px 0;
+  }
+  .bt-trades-controls select, .bt-trades-controls input {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 5px 8px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: 4px;
+  }
+  .bt-trades-table tr.win td:last-child { color: var(--green); }
+  .bt-trades-table tr.loss td:last-child { color: var(--red); }
+
+  /* ---- Mobile: below this width, nothing should force horizontal page
+     scrolling or squeeze into unreadable columns. Wide tables scroll inside
+     their own .table-scroll container instead (see above); everything else
+     stacks to one column. ---- */
+  @media (max-width: 760px) {
+    .topbar { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .controls { flex-wrap: wrap; }
+    .layout { grid-template-columns: 1fr; }
+    .chain-tables { grid-template-columns: 1fr; }
+    .scanner-header, .chain-header { flex-wrap: wrap; }
+    .callout-summary { flex-wrap: wrap; row-gap: 6px; }
+    .callout-caret { margin-left: auto; }
+    .picker-grid { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
+    body { font-size: 15px; }
+  }
 </style>
 </head>
 <body>
@@ -766,11 +804,15 @@
   <div class="chain-tables">
     <div class="chain-col">
       <div class="chain-col-title call">CALLS</div>
-      <table id="callsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
+      <div class="table-scroll">
+        <table id="callsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
+      </div>
     </div>
     <div class="chain-col">
       <div class="chain-col-title put">PUTS</div>
-      <table id="putsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
+      <div class="table-scroll">
+        <table id="putsTable"><thead><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Last</th><th>Vol</th><th>OI</th></tr></thead><tbody></tbody></table>
+      </div>
     </div>
   </div>
 </div>
@@ -783,6 +825,43 @@
   </div>
   <div id="backtestEmpty" class="scanner-empty" style="display:none;"></div>
   <div id="backtestBody" style="display:none;"></div>
+
+  <div id="backtestTradesSection" style="display:none;">
+    <h4 style="margin:16px 0 6px;">Individual Trades — the exact simulated entries/exits behind the stats above</h4>
+    <div class="bt-trades-controls">
+      <label>Sort
+        <select id="tradesSortSelect">
+          <option value="r_desc">Best R first</option>
+          <option value="r_asc">Worst R first</option>
+          <option value="recent">Most recent first</option>
+        </select>
+      </label>
+      <label>Show
+        <select id="tradesFilterSelect">
+          <option value="all">All outcomes</option>
+          <option value="win">Winners only</option>
+          <option value="loss">Losers only</option>
+        </select>
+      </label>
+      <span class="scanner-meta" id="tradesCountMeta"></span>
+    </div>
+    <div class="table-scroll">
+      <table class="bt-calibration-table bt-trades-table" id="tradesTable">
+        <thead><tr>
+          <th style="text-align:left;">Ticker</th><th>Timeframe</th><th>Direction</th>
+          <th style="text-align:left;">Entry</th><th>Score</th><th>Outcome</th><th>Result</th>
+        </tr></thead>
+        <tbody id="tradesTableBody"></tbody>
+      </table>
+    </div>
+    <div class="footer-note">
+      "Best R first" surfaces the winners -- but a handful of good-looking individual trades
+      doesn't override the aggregate stats above; this is here so you can see what a callout
+      actually looked like, not to cherry-pick a story. R is the trade's return as a multiple
+      of what it risked (2.0R = made twice what was risked; -1.0R = the full planned stop hit).
+    </div>
+  </div>
+
   <div class="footer-note">
     This is a walk-forward backtest of the TECHNICAL portion of the score only (strategy
     agreement, RSI, volume, trend filter, multi-timeframe confluence, relative strength) --
@@ -1279,6 +1358,56 @@ function renderBacktestTimeframe(tfName, tfReport) {
   return html;
 }
 
+let allBacktestTrades = [];
+const TRADES_DISPLAY_CAP = 300; // a full S&P 500 multi-year run can generate thousands; cap what's rendered for phone/browser performance -- sorting/filtering still applies to the full set first
+
+function renderTradesTable() {
+  const section = document.getElementById('backtestTradesSection');
+  if (!allBacktestTrades.length) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+
+  const filter = document.getElementById('tradesFilterSelect').value;
+  const sort = document.getElementById('tradesSortSelect').value;
+
+  let rows = allBacktestTrades.filter(t => {
+    if (filter === 'win') return t.r_multiple > 0;
+    if (filter === 'loss') return t.r_multiple <= 0;
+    return true;
+  });
+
+  rows = rows.slice().sort((a, b) => {
+    if (sort === 'r_desc') return b.r_multiple - a.r_multiple;
+    if (sort === 'r_asc') return a.r_multiple - b.r_multiple;
+    return a.entry_time < b.entry_time ? 1 : -1; // 'recent'
+  });
+
+  const total = rows.length;
+  const shown = rows.slice(0, TRADES_DISPLAY_CAP);
+  document.getElementById('tradesCountMeta').textContent = total > TRADES_DISPLAY_CAP
+    ? `showing ${TRADES_DISPLAY_CAP} of ${total} matching trades`
+    : `${total} trade${total === 1 ? '' : 's'}`;
+
+  document.getElementById('tradesTableBody').innerHTML = shown.map(t => {
+    const win = t.r_multiple > 0;
+    return `
+      <tr class="${win ? 'win' : 'loss'}">
+        <td style="text-align:left;">${escapeHtml(t.ticker)}</td>
+        <td>${escapeHtml(t.timeframe)}</td>
+        <td>${escapeHtml(t.direction)}</td>
+        <td style="text-align:left;">${escapeHtml(t.entry_time)}</td>
+        <td>${t.tech_score}</td>
+        <td>${escapeHtml(t.outcome)}</td>
+        <td>${t.r_multiple.toFixed(2)}R</td>
+      </tr>`;
+  }).join('');
+}
+
+document.getElementById('tradesSortSelect').addEventListener('change', renderTradesTable);
+document.getElementById('tradesFilterSelect').addEventListener('change', renderTradesTable);
+
 async function loadBacktest() {
   try {
     const res = await fetch('/api/backtest');
@@ -1295,6 +1424,8 @@ async function loadBacktest() {
       body.style.display = 'none';
       empty.style.display = 'block';
       empty.textContent = d.note || 'Backtest has not run yet.';
+      allBacktestTrades = [];
+      renderTradesTable();
       return;
     }
 
@@ -1302,6 +1433,9 @@ async function loadBacktest() {
     empty.style.display = 'none';
     body.style.display = 'block';
     body.innerHTML = Object.entries(d.report).map(([tf, tfReport]) => renderBacktestTimeframe(tf, tfReport)).join('');
+
+    allBacktestTrades = d.trades || [];
+    renderTradesTable();
   } catch (e) {
     // stay quiet; the chart panel already surfaces connection errors
   }
@@ -1338,14 +1472,16 @@ function renderPositionsTable(title, positions, isOpen) {
 
   return `
     <div class="challenge-section-title">${escapeHtml(title)} (${positions.length})</div>
-    <table class="challenge-position-table">
-      <thead><tr>
-        <th style="text-align:left;">Ticker</th><th style="text-align:left;">Type</th><th>Qty</th>
-        <th style="text-align:left;">Detail</th><th>Cost</th>
-        <th>${isOpen ? 'Entered' : 'Exit'}</th><th>P&amp;L</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
+    <div class="table-scroll">
+      <table class="challenge-position-table">
+        <thead><tr>
+          <th style="text-align:left;">Ticker</th><th style="text-align:left;">Type</th><th>Qty</th>
+          <th style="text-align:left;">Detail</th><th>Cost</th>
+          <th>${isOpen ? 'Entered' : 'Exit'}</th><th>P&amp;L</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
   `;
 }
 

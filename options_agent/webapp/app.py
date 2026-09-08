@@ -364,7 +364,7 @@ def backtest_results():
     run separately."""
     if not os.path.exists(BACKTEST_RESULTS_PATH):
         return jsonify({
-            "generated_at": None, "report": {},
+            "generated_at": None, "report": {}, "trades": [],
             "note": "Backtest hasn't run yet. Click \"Run Backtest\" above, or start it separately with: python scanner_backtest.py",
         })
     with open(BACKTEST_RESULTS_PATH) as f:
