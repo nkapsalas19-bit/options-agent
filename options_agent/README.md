@@ -417,15 +417,27 @@ panel:
 
 ### How recommendations get sized
 
-Every scanner callout that matches your instrument preference gets a
-**"Suggested: N shares/contracts... — cost $X, risking $Y"** box with an
-"Add to Challenge" button, computed from your *current* cash balance (not
-your original starting budget — sizing shrinks automatically as the
-balance changes) and the risk-per-trade cap, using the exact same
-ATR-based stop distance already shown in that callout's exit plan. If
-even one unit would risk more than your cap allows, or cost more than you
-have, it's marked as not fitting rather than sized down to something the
-scoring doesn't actually support.
+The Trading Challenge panel itself has a **"Trade Recommendations For This
+Challenge"** section — it doesn't wait for you to go find something in the
+Market Scanner list below. Every time a scan finishes, it re-checks that
+scan's callouts against your instrument preference, current cash balance
+(not your original starting budget — sizing shrinks automatically as the
+balance changes), and risk-per-trade cap, using the exact same ATR-based
+stop distance already shown in that callout's exit plan, and lists exactly
+the ones that actually fit with a **"Suggested: N shares/contracts... —
+cost $X, risking $Y"** line and an "Add to Challenge" button. If even one
+unit would risk more than your cap allows, or cost more than you have, that
+callout is left out rather than sized down to something the scoring
+doesn't actually support.
+
+If nothing fits (or the scan found no callouts at all -- see "Market
+Scanner" above for why that's often correct, not broken), the panel says so
+plainly and, when available, shows the same "recent activity that didn't
+clear the confidence bar" near-misses the Market Scanner panel shows -- so
+an empty Challenge recommendation list is never just silence. (The same
+per-callout "Add to Challenge" widget still also appears inline on each
+card in the Market Scanner list below, for when you're browsing there
+directly -- both call the same sizing logic, so they never disagree.)
 
 ### What happens after you add a trade
 

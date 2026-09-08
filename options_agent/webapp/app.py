@@ -584,6 +584,41 @@ def challenge_preview():
     return jsonify({"sizings": sizings})
 
 
+@app.route("/api/challenge/recommendations")
+@login_required
+def challenge_recommendations():
+    """Self-contained feed for the Challenge panel: takes the latest scan
+    results (same file /api/scanner reads) and sizes every callout against
+    the active challenge's own budget/risk/instrument settings, so the
+    Challenge section always shows what it can actually act on right now
+    instead of requiring a person to go re-read the Market Scanner cards."""
+    cfg = challenge.get_challenge()
+    if not cfg:
+        return jsonify({"error": "no active challenge"}), 400
+    if not os.path.exists(SCANNER_RESULTS_PATH):
+        return jsonify({
+            "recommendations": [], "near_misses": [], "scanner_generated_at": None,
+            "note": "Scanner hasn't run yet. Click \"Scan Now\" above, or wait for the next automatic scan.",
+        })
+    with open(SCANNER_RESULTS_PATH) as f:
+        scan_data = json.load(f)
+
+    summary = challenge.get_summary()
+    recommendations = []
+    for c in scan_data.get("callouts", []):
+        sizing = challenge.suggest_position_size(c, cfg, summary["cash_balance"])
+        if sizing:
+            recommendations.append({"callout": c, "sizing": sizing})
+    recommendations.sort(key=lambda r: r["callout"]["confidence_score"], reverse=True)
+
+    return jsonify({
+        "recommendations": recommendations,
+        "near_misses": scan_data.get("near_misses", []),
+        "scanner_generated_at": scan_data.get("generated_at"),
+        "total_callouts_this_scan": len(scan_data.get("callouts", [])),
+    })
+
+
 @app.route("/api/challenge/trades", methods=["POST"])
 @login_required
 def add_challenge_trade():

@@ -966,6 +966,10 @@
         <div class="progress-fill goal" id="chGoalFill"></div>
       </div>
     </div>
+    <h4 style="margin:16px 0 6px;">Trade Recommendations For This Challenge</h4>
+    <div class="scanner-meta" id="challengeRecsMeta"></div>
+    <div id="challengeRecs"></div>
+
     <div id="challengeOpenPositions"></div>
     <div id="challengeClosedPositions"></div>
     <button class="picker-toggle-btn" id="resetChallengeBtn" style="margin-top:12px;">Reset Challenge</button>
@@ -1525,6 +1529,8 @@ async function loadChallenge() {
 
     document.getElementById('challengeOpenPositions').innerHTML = renderPositionsTable('Open Positions', d.open_positions, true);
     document.getElementById('challengeClosedPositions').innerHTML = renderPositionsTable('Closed Positions', d.closed_positions, false);
+
+    await loadChallengeRecommendations();
   } catch (e) {
     // stay quiet; not critical to the rest of the page
   }
@@ -1723,9 +1729,91 @@ async function loadScanner() {
 
     if (currentChallenge) {
       loadChallengeSizing(d.callouts);
+      loadChallengeRecommendations();
     }
   } catch (e) {
     // stay quiet; the chart panel already surfaces connection errors
+  }
+}
+
+async function addChallengeTrade(callout, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Adding...';
+  try {
+    const addRes = await fetch('/api/challenge/trades', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callout }),
+    });
+    const addData = await addRes.json();
+    if (!addRes.ok) {
+      btn.textContent = addData.error || 'Failed';
+      return;
+    }
+    btn.textContent = 'Added ✓';
+    await loadChallenge();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Add to Challenge';
+  }
+}
+
+async function loadChallengeRecommendations() {
+  const recsEl = document.getElementById('challengeRecs');
+  const metaEl = document.getElementById('challengeRecsMeta');
+  if (!currentChallenge || !recsEl) return;
+  try {
+    const res = await fetch('/api/challenge/recommendations');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) return;
+    const d = await res.json();
+
+    if (!d.scanner_generated_at) {
+      metaEl.textContent = '';
+      recsEl.innerHTML = `<div class="picker-hint">${escapeHtml(d.note || 'Scanner has not run yet.')}</div>`;
+      return;
+    }
+
+    metaEl.textContent = `scanned ${d.scanner_generated_at} · ${d.total_callouts_this_scan} callout(s) this scan`;
+
+    if (!d.recommendations.length) {
+      let msg = d.total_callouts_this_scan > 0
+        ? `None of this scan's callouts fit your instrument preference, budget, or risk cap right now.`
+        : `No callouts cleared the confidence bar this scan.`;
+      if (d.near_misses && d.near_misses.length) {
+        const items = d.near_misses.map(m => {
+          const when = m.bars_ago === 0 ? 'today' : `${m.bars_ago} trading day${m.bars_ago > 1 ? 's' : ''} ago`;
+          return `${escapeHtml(m.ticker)} (${escapeHtml(m.direction)} signal ${when}, score ${m.tech_score}/${m.tech_score_max})`;
+        }).join(' · ');
+        msg += ` Recent activity that didn't clear the bar: ${items}.`;
+      }
+      recsEl.innerHTML = `<div class="picker-hint">${msg}</div>`;
+      return;
+    }
+
+    recsEl.innerHTML = d.recommendations.map((r, i) => {
+      const c = r.callout, sizing = r.sizing;
+      const detail = sizing.instrument === 'shares'
+        ? `${sizing.qty} shares @ $${sizing.entry_price.toFixed(2)}`
+        : `${sizing.qty} ${sizing.option_type} contract(s), $${sizing.strike} strike, exp ${sizing.expiration_date} @ $${sizing.entry_price.toFixed(2)}`;
+      const dirClass = c.direction === 'BULLISH' ? 'bullish' : 'bearish';
+      return `
+        <div class="suggested-size-box">
+          <span>
+            <span class="callout-ticker">${escapeHtml(c.ticker)}</span>
+            <span class="callout-tf">${escapeHtml(c.timeframe)}</span>
+            <span class="callout-direction ${dirClass}">${escapeHtml(c.direction)}</span>
+            — confidence ${c.confidence_score.toFixed(0)} — <strong>${escapeHtml(detail)}</strong>
+            — cost ${fmtMoney(sizing.cost)}, risking ${fmtMoney(sizing.risk_dollars)}
+          </span>
+          <button class="add-trade-btn" data-idx="${i}">Add to Challenge</button>
+        </div>`;
+    }).join('');
+
+    recsEl.querySelectorAll('.add-trade-btn').forEach(btn => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      btn.addEventListener('click', (e) => addChallengeTrade(d.recommendations[idx].callout, e.target));
+    });
+  } catch (e) {
+    // stay quiet; the rest of the challenge panel already loaded
   }
 }
 
@@ -1755,26 +1843,9 @@ async function loadChallengeSizing(callouts) {
           <button class="add-trade-btn" data-idx="${i}">Add to Challenge</button>
         </div>
       `;
-      slot.querySelector('.add-trade-btn').addEventListener('click', async (e) => {
+      slot.querySelector('.add-trade-btn').addEventListener('click', (e) => {
         e.stopPropagation();
-        const btn = e.target;
-        btn.disabled = true;
-        btn.textContent = 'Adding...';
-        try {
-          const addRes = await fetch('/api/challenge/trades', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callout: c }),
-          });
-          const addData = await addRes.json();
-          if (!addRes.ok) {
-            btn.textContent = addData.error || 'Failed';
-            return;
-          }
-          btn.textContent = 'Added ✓';
-          await loadChallenge();
-        } catch (err) {
-          btn.disabled = false;
-          btn.textContent = 'Add to Challenge';
-        }
+        addChallengeTrade(c, e.target);
       });
     });
   } catch (e) {
