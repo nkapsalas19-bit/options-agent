@@ -70,6 +70,7 @@ running forever with nothing happening."
 |---|---|
 | `DASHBOARD_PASSWORD` | pick your own password |
 | `FLASK_SECRET_KEY` | any long random string (mashing your keyboard for 30-40 characters works fine) |
+| `NTFY_TOPIC` | optional — a long, hard-to-guess name for phone push notifications; see README's "Push notifications" section |
 
 7. Click **Create Web Service** (or, if you already created the service with
    the wrong Root Directory, open it → **Settings** → fix **Root Directory**

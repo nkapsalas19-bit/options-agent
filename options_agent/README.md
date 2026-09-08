@@ -397,6 +397,54 @@ per day):
 Without these set, `alerts.py` prints the alert to the console instead of
 failing, so the scanner keeps running.
 
+### Push notifications (an actual phone buzz, not just email)
+
+Set these to get a real push notification via [ntfy.sh](https://ntfy.sh)
+(free, no account needed) whenever a high-confidence callout fires, a
+callout fits your active Challenge's budget/risk settings, or a Challenge
+position closes:
+
+1. Install the **ntfy** app ([iOS](https://apps.apple.com/us/app/ntfy/id1625396347) /
+   [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)),
+   or just use a desktop browser at ntfy.sh.
+2. Pick a topic name that's long and hard to guess — it's not a password,
+   but ntfy topics are public by default (anyone who knows the exact name
+   can subscribe to it too), so don't use something like `mytrades`. Something
+   like `n-kapsalas-opts-f8x2q1` is fine.
+3. In the app, subscribe to that exact topic name.
+4. Set the environment variable `NTFY_TOPIC` to that same name (same place
+   as `DASHBOARD_PASSWORD` on Render).
+
+That's it — no API key, no signup. Without `NTFY_TOPIC` set, `push.py`
+prints the notification to the console instead of failing, same as the
+email alerts above.
+
+### How "live" is any of this, honestly
+
+**Not to-the-second, and no legitimate free system can be.** Three separate
+limits stack here, not just one:
+- **The data itself**: this runs on free Yahoo Finance data (`yfinance`),
+  not a paid real-time feed. It's usually fresh within seconds to a couple
+  minutes, but there's no guarantee (no SLA) and no tick-by-tick access.
+- **The signals are bar-based, not tick-based**: an "MA crossover" or "BB
+  breakout" only exists once a 5-minute, 15-minute, or daily candle
+  *closes*. There's no such thing as a sub-bar version of these signals —
+  that's what the indicator mathematically is, not a limitation of the code.
+- **The scan cadence** (`SCAN_INTERVAL_SECONDS`, default 90s, overridable
+  via environment variable) is bounded by Yahoo's anti-scraping behavior:
+  scanning much faster than every ~60-90s from a cloud IP risks getting
+  rate-limited or blocked outright, which would make results *more* stale,
+  not less.
+
+And even a perfectly instant, perfectly accurate notification still isn't a
+trade — this platform has no real broker connection. A push notification is
+a prompt to go act in your own brokerage; by the time you open the app and
+place the order, the market has moved some further amount no matter how
+fast the pipeline is. Anyone promising a free tool that trades "to the
+second" is either connected to a paid real-time feed and a real broker API
+(a materially different, and not free, kind of system) or not being honest
+with you about what it's actually doing.
+
 ## Trading Challenge
 
 A goal-oriented paper-trading tracker layered on top of the scanner
@@ -477,26 +525,35 @@ read), and full open/closed position tables.
 
 ### Notifications
 
-Two separate things get emailed (same `GMAIL_ADDRESS`/`GMAIL_APP_PASSWORD`
-setup as "Email alerts" above — no extra configuration):
+Three things trigger both an email (if `GMAIL_ADDRESS`/`GMAIL_APP_PASSWORD`
+are set — see "Email alerts" above) and a push notification (if `NTFY_TOPIC`
+is set — see "Push notifications" above) with no extra configuration beyond
+those two setups:
 
-- **New callout found** — unchanged, deduped to once per ticker/timeframe/
-  direction/day, whenever a scan turns up a callout scoring at or above
+- **New callout found** — deduped to once per ticker/timeframe/direction/
+  day, whenever a scan turns up a callout scoring at or above
   `config.ALERT_MIN_CONFIDENCE`.
-- **Challenge position closed** — a new email fires the moment
-  `check_open_positions()` closes an open Challenge trade (target, stop,
-  or time-stop), with the ticker, entry/exit price, P&L, and why it closed.
+- **A callout fits your active Challenge** — separately deduped, fires for
+  any callout `challenge.suggest_position_size()` says actually fits your
+  Challenge's current budget/risk/instrument settings, even if its
+  confidence score is below `ALERT_MIN_CONFIDENCE` (the bar here is "can
+  you act on this," not "is this especially high-conviction"). This is the
+  one meant to get you to the dashboard's Challenge panel to add the trade.
+- **Challenge position closed** — fires the moment `check_open_positions()`
+  closes an open Challenge trade (target, stop, or time-stop), with the
+  ticker, entry/exit price, P&L, and why it closed.
 
-**Be honest with yourself about what "notification" means here**:
-resolution only happens when a scan runs, which is at most every
-`config.SCAN_INTERVAL_SECONDS` (default 5 minutes) via auto-scan, or
-whenever your external cron ping fires if you set one up. It is **not**
-a live tick-by-tick feed, and there is **no real broker connection** —
-the email is a prompt to go check and manually act in your actual
-brokerage if you're shadowing this trade for real, not a confirmation
-that anything was actually bought or sold. "Best possible time" is
-bounded by both that scan cadence and the fact this system can't execute
-anything itself.
+**Be honest with yourself about what "notification" means here**: resolution
+only happens when a scan runs, which is at most every
+`config.SCAN_INTERVAL_SECONDS` (default 90s, overridable via environment
+variable — see "How 'live' is any of this, honestly" above for why it isn't,
+and can't safely be, lower than that), or whenever your external cron ping
+fires if you set one up. It is **not** a live tick-by-tick feed, and there
+is **no real broker connection** — the notification is a prompt to go check
+and manually act in your actual brokerage if you're shadowing this trade
+for real, not a confirmation that anything was actually bought or sold.
+"Best possible time" is bounded by both that scan cadence and the fact this
+system can't execute anything itself.
 
 ### What this is and isn't
 

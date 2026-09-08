@@ -88,7 +88,14 @@ TOP_30_MOST_TRADED = [
     "NFLX", "INTC", "F", "BAC", "PLTR", "SOFI", "NIO", "RIVN", "LCID", "AAL",
     "CCL", "SNAP", "UBER", "COIN", "MARA", "RIOT", "T", "PFE", "XOM", "BABA",
 ]
-SCAN_INTERVAL_SECONDS = 300
+# Set an environment variable named SCAN_INTERVAL_SECONDS to override this without a
+# redeploy. Default is 90s, deliberately not lower: yfinance has no documented rate
+# limit, but in practice a small watchlist (~10 tickers) scanned every 60-90s from a
+# cloud IP has run reliably in testing, while much faster than that risks getting
+# rate-limited or blocked outright (see the SCANNER_UNIVERSE_MODE note above) -- which
+# would make the scanner MORE stale, not less, once Yahoo starts refusing requests. This
+# is not a documented guarantee from Yahoo, just an empirically safer floor than 300s.
+SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "90"))
 NEWS_LOOKBACK_HOURS = 24
 MIN_CONFIDENCE_SCORE = 60     # callouts scoring below this are discarded entirely, not just hidden in the UI
 ALERT_MIN_CONFIDENCE = 75     # only email/SMS-alert on higher conviction than the dashboard's minimum

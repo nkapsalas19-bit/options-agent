@@ -22,10 +22,12 @@ import config
 from universe import get_scan_universe
 from scanner import scan_universe
 from alerts import send_email_alert
+from push import send_push
 import challenge
 
 RESULTS_PATH = os.path.join(os.path.dirname(__file__), "scanner_results.json")
 ALERTED_PATH = os.path.join(os.path.dirname(__file__), "alerted_callouts.json")
+CHALLENGE_ALERTED_PATH = os.path.join(os.path.dirname(__file__), "challenge_alerted_callouts.json")
 
 
 def _load_json(path, default):
@@ -129,16 +131,49 @@ def run_once(tickers=None):
             continue
         subject, body = _format_alert(c)
         send_email_alert(subject, body)
+        send_push(subject, f"{c['suggested_action']} -- confidence {c['confidence_score']}/100. "
+                            f"Open the dashboard for the full reasoning and exit plan.",
+                  priority="default", tags=["chart_with_upwards_trend" if c["direction"] == "BULLISH" else "chart_with_downwards_trend"])
         alerted.add(key)
 
     _save_json(ALERTED_PATH, sorted(alerted))
 
-    if challenge.get_challenge():
+    cfg = challenge.get_challenge()
+    if cfg:
+        try:
+            summary = challenge.get_summary()
+            challenge_alerted = set(_load_json(CHALLENGE_ALERTED_PATH, []))
+            for c in callouts:
+                sizing = challenge.suggest_position_size(c, cfg, summary["cash_balance"])
+                if not sizing:
+                    continue
+                key = _alert_key(c)
+                if key in challenge_alerted:
+                    continue
+                detail = (f"{sizing['qty']} shares" if sizing["instrument"] == "shares"
+                          else f"{sizing['qty']} {sizing['option_type']} contract(s) ${sizing['strike']} "
+                               f"exp {sizing['expiration_date']}")
+                send_push(
+                    f"Challenge trade: {c['direction']} {c['ticker']}",
+                    f"{detail} @ ${sizing['entry_price']:.2f} -- cost ${sizing['cost']:.2f}, "
+                    f"risking ${sizing['risk_dollars']:.2f}. Confidence {c['confidence_score']}/100. "
+                    "Open the dashboard's Challenge panel to add it.",
+                    priority="high", tags=["moneybag"],
+                )
+                challenge_alerted.add(key)
+            _save_json(CHALLENGE_ALERTED_PATH, sorted(challenge_alerted))
+        except Exception as e:
+            print(f"[scanner] challenge recommendation push failed: {e}")
+
         try:
             _, newly_closed = challenge.check_open_positions()
             for t in newly_closed:
                 subject, body = _format_close_alert(t)
                 send_email_alert(subject, body)
+                pnl = t["proceeds"] - t["cost"]
+                send_push(subject, f"{'+' if pnl >= 0 else '-'}${abs(pnl):.2f} -- go check your real "
+                                    "position if you're shadowing this trade.",
+                          priority="high", tags=["moneybag"])
         except Exception as e:
             print(f"[scanner] challenge position check failed: {e}")
 
